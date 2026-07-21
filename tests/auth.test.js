@@ -23,6 +23,10 @@ function createAuthContext(initialProperties = {}) {
       Object.entries(values).forEach(([key, value]) => properties.set(key, String(value)));
       return this;
     },
+    setProperty(key, value) {
+      properties.set(key, String(value));
+      return this;
+    },
     deleteProperty(key) {
       properties.delete(key);
       return this;
@@ -38,6 +42,9 @@ function createAuthContext(initialProperties = {}) {
         rows: [],
         appendRow(row) {
           this.rows.push([...row]);
+        },
+        getLastRow() {
+          return this.rows.length;
         }
       };
       sheets.set(name, sheet);
@@ -138,7 +145,37 @@ test('protected admin operations reject a missing session', () => {
 
   assert.throws(() => context.getLineBotStatus(''), /เข้าสู่ระบบผู้ดูแล/);
   assert.throws(() => context.saveConfig(13.7, 100.5, 0.1, ''), /เข้าสู่ระบบผู้ดูแล/);
-  assert.throws(() => context.registerUser('สมชาย', [0.1], ''), /เข้าสู่ระบบผู้ดูแล/);
+  assert.throws(() => context.setRegistrationMode(true, 30, ''), /เข้าสู่ระบบผู้ดูแล/);
+});
+
+test('self registration is available only while an admin-opened window is active', () => {
+  const { context, sheets } = createAuthContext({
+    ADMIN_USERNAME: 'admin',
+    ADMIN_BOOTSTRAP_PASSWORD: 'a-strong-password-123'
+  });
+  context.initializeAdminLogin();
+
+  assert.equal(context.getRegistrationStatus().enabled, false);
+  assert.throws(() => context.registerUser('Employee', [0.1]), /ปิดรับลงทะเบียน/);
+
+  const login = context.loginAdmin('admin', 'a-strong-password-123');
+  assert.throws(
+    () => context.setRegistrationMode(true, 481, login.sessionToken),
+    /5–480 นาที/
+  );
+  const opened = context.setRegistrationMode(true, 30, login.sessionToken);
+  assert.equal(opened.enabled, true);
+  assert.ok(opened.expiresAt);
+  assert.equal(context.getRegistrationStatus().enabled, true);
+
+  const registered = context.registerUser('Employee', [0.1, 0.2]);
+  assert.equal(registered.success, true);
+  assert.equal(sheets.get('Users').rows.length, 2);
+  assert.equal(sheets.get('AuditLog').rows.at(-1)[1], 'USER_REGISTERED');
+
+  context.setRegistrationMode(false, 30, login.sessionToken);
+  assert.equal(context.getRegistrationStatus().enabled, false);
+  assert.throws(() => context.registerUser('Another employee', [0.2]), /ปิดรับลงทะเบียน/);
 });
 
 test('admin login is rate limited after repeated failures', () => {

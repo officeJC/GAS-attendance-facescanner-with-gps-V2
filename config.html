@@ -146,6 +146,21 @@
       box-shadow: 0 8px 30px rgba(16,185,129,0.5);
       transform: translateY(-2px);
     }
+    .button-row {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+      margin-bottom: 14px;
+    }
+    .btn-open { background: #059669; color: white; }
+    .btn-close { background: #b91c1c; color: white; }
+    .btn-copy {
+      background: rgba(99,102,241,0.18); color: #c7d2fe;
+      border: 1px solid rgba(99,102,241,0.35); margin-bottom: 14px;
+    }
+    .registration-status {
+      padding: 12px 14px; border-radius: 12px; margin-bottom: 14px;
+      background: rgba(255,255,255,0.05); color: #cbd5e1;
+      line-height: 1.55; white-space: pre-line;
+    }
 
     .btn-back {
       display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -273,6 +288,29 @@
     <p class="note">* ใส่ 0 หากไม่ต้องการจำกัดพื้นที่</p>
   </div>
 
+  <!-- Employee Registration Mode Card -->
+  <div class="card">
+    <div class="section-header">
+      <div class="section-icon indigo">📷</div>
+      <span class="section-title-text">โหมดรับลงทะเบียนพนักงาน</span>
+    </div>
+    <div id="registrationModeStatus" class="registration-status">กำลังตรวจสอบสถานะ...</div>
+
+    <label for="registrationDuration">ระยะเวลาที่เปิดรับ (นาที)</label>
+    <input type="number" id="registrationDuration" min="5" max="480" step="5" value="30">
+    <p class="note">เปิดได้ครั้งละ 5–480 นาที เมื่อหมดเวลาระบบจะปิดรับอัตโนมัติ</p>
+
+    <div class="button-row">
+      <button class="btn btn-open" type="button" onclick="setRegistrationMode(true)">เปิดรับลงทะเบียน</button>
+      <button class="btn btn-close" type="button" onclick="setRegistrationMode(false)">ปิดรับลงทะเบียน</button>
+    </div>
+
+    <label for="registrationUrl">ลิงก์ส่งให้พนักงาน</label>
+    <input type="url" id="registrationUrl" readonly>
+    <button class="btn btn-copy" type="button" onclick="copyRegistrationLink()">คัดลอกลิงก์ลงทะเบียน</button>
+    <p class="note">พนักงานเปิดลิงก์และลงทะเบียนใบหน้าได้โดยไม่ต้อง Login เฉพาะช่วงที่แอดมินเปิดรับเท่านั้น</p>
+  </div>
+
   <!-- LINE Bot Status Card -->
   <div class="card">
     <div class="section-header">
@@ -363,13 +401,10 @@
     loginView.classList.add('hidden');
     adminView.classList.remove('hidden');
 
-    const returnTo = new URLSearchParams(window.location.search).get('returnTo');
-    if (returnTo === 'register.html') {
-      window.location.href = 'register.html';
-      return;
-    }
+    document.getElementById('registrationUrl').value = new URL('register.html', window.location.href).href;
     loadGpsConfig(apiUrl);
     loadLineBotStatus(apiUrl);
+    loadRegistrationStatus(apiUrl);
   }
 
   function logoutAdmin() {
@@ -414,6 +449,62 @@
     } catch (error) {
       statusElement.innerText = '❌ ตรวจสอบสถานะ LINE Bot ไม่ได้: ' + error.message;
     }
+  }
+
+  async function loadRegistrationStatus(apiUrl) {
+    const statusElement = document.getElementById('registrationModeStatus');
+    try {
+      const response = await fetch(apiUrl + '?action=getRegistrationStatus');
+      const status = await response.json();
+      if (!status.success) throw new Error(status.error || 'โหลดสถานะไม่สำเร็จ');
+      statusElement.innerText = status.enabled
+        ? '✅ เปิดรับลงทะเบียนอยู่\nหมดเวลา: ' + formatBangkokDateTime(status.expiresAt)
+        : '🔒 ปิดรับลงทะเบียนอยู่';
+    } catch (error) {
+      statusElement.innerText = '❌ ตรวจสอบสถานะไม่ได้: ' + error.message;
+    }
+  }
+
+  async function setRegistrationMode(enabled) {
+    const durationMinutes = Number(document.getElementById('registrationDuration').value || 30);
+    if (enabled && (durationMinutes < 5 || durationMinutes > 480)) {
+      return showMsg('❌ ระยะเวลาต้องอยู่ระหว่าง 5–480 นาที', 'error');
+    }
+    showMsg('⏳ กำลังอัปเดตโหมดรับลงทะเบียน...', '');
+    try {
+      const result = await postApi(activeApiUrl, {
+        action: 'setRegistrationMode',
+        enabled: enabled,
+        durationMinutes: durationMinutes,
+        sessionToken: adminSessionToken
+      });
+      if (!result.success) throw new Error(result.error || 'อัปเดตโหมดไม่สำเร็จ');
+      showMsg(enabled ? '✅ เปิดรับลงทะเบียนแล้ว' : '✅ ปิดรับลงทะเบียนแล้ว', 'success');
+      await loadRegistrationStatus(activeApiUrl);
+    } catch (error) {
+      showMsg('❌ ' + error.message, 'error');
+    }
+  }
+
+  async function copyRegistrationLink() {
+    const url = document.getElementById('registrationUrl').value;
+    try {
+      await navigator.clipboard.writeText(url);
+      showMsg('✅ คัดลอกลิงก์ลงทะเบียนแล้ว', 'success');
+    } catch (error) {
+      const field = document.getElementById('registrationUrl');
+      field.focus();
+      field.select();
+      showMsg('กรุณาคัดลอกลิงก์ที่เลือกไว้', '');
+    }
+  }
+
+  function formatBangkokDateTime(isoValue) {
+    return new Intl.DateTimeFormat('th-TH', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: 'Asia/Bangkok'
+    }).format(new Date(isoValue));
   }
 
   function getCurrentLocation() {

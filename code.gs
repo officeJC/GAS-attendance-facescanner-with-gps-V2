@@ -31,6 +31,7 @@ function doGet(e) {
   try {
     if (action === 'getConfig') return jsonResponse_(getConfig());
     if (action === 'getKnownFaces') return jsonResponse_(getKnownFaces());
+    if (action === 'getRegistrationStatus') return jsonResponse_(getRegistrationStatus());
     return jsonResponse_({ success: false, error: 'Unknown action: ' + action });
   } catch (error) {
     return jsonResponse_({ success: false, error: getErrorMessage_(error) });
@@ -57,7 +58,7 @@ function doPost(e) {
       return jsonResponse_(getLineBotStatus(data.sessionToken));
     }
     if (action === 'registerUser') {
-      return jsonResponse_(registerUser(data.name, data.faceDescriptor, data.sessionToken));
+      return jsonResponse_(registerUser(data.name, data.faceDescriptor));
     }
     if (action === 'logAttendance') {
       return jsonResponse_(logAttendance(
@@ -71,6 +72,9 @@ function doPost(e) {
     }
     if (action === 'saveConfig') {
       return jsonResponse_(saveConfig(data.lat, data.lng, data.radius, data.sessionToken));
+    }
+    if (action === 'setRegistrationMode') {
+      return jsonResponse_(setRegistrationMode(data.enabled, data.durationMinutes, data.sessionToken));
     }
     return jsonResponse_({ success: false, error: 'Unknown action: ' + action });
   } catch (error) {
@@ -285,8 +289,68 @@ function getAdminSessionTtlMinutes_() {
 }
 
 // --- ส่วนจัดการใบหน้า (Users) ---
-function registerUser(name, faceDescriptor, sessionToken) {
+function getRegistrationStatus() {
+  const properties = PropertiesService.getScriptProperties();
+  const configuredEnabled = properties.getProperty('REGISTRATION_ENABLED') === 'true';
+  const expiresAtMs = Number(properties.getProperty('REGISTRATION_EXPIRES_AT') || 0);
+  const enabled = configuredEnabled && Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
+
+  if (configuredEnabled && !enabled) {
+    properties.setProperty('REGISTRATION_ENABLED', 'false');
+  }
+
+  return {
+    success: true,
+    enabled: enabled,
+    expiresAt: enabled ? new Date(expiresAtMs).toISOString() : null
+  };
+}
+
+function setRegistrationMode(enabled, durationMinutes, sessionToken) {
   const adminSession = requireAdminSession_(sessionToken);
+  const properties = PropertiesService.getScriptProperties();
+  const shouldEnable = enabled === true || enabled === 'true';
+  let expiresAt = null;
+
+  if (shouldEnable) {
+    const requestedMinutes = durationMinutes === undefined || durationMinutes === null || durationMinutes === ''
+      ? 30
+      : Number(durationMinutes);
+    if (!Number.isFinite(requestedMinutes) || requestedMinutes < 5 || requestedMinutes > 480) {
+      throw new Error('ระยะเวลาเปิดรับลงทะเบียนต้องอยู่ระหว่าง 5–480 นาที');
+    }
+    const safeMinutes = Math.floor(requestedMinutes);
+    const expiresAtMs = Date.now() + safeMinutes * 60 * 1000;
+    expiresAt = new Date(expiresAtMs).toISOString();
+    properties.setProperties({
+      REGISTRATION_ENABLED: 'true',
+      REGISTRATION_EXPIRES_AT: String(expiresAtMs)
+    }, false);
+  } else {
+    properties.setProperties({
+      REGISTRATION_ENABLED: 'false',
+      REGISTRATION_EXPIRES_AT: '0'
+    }, false);
+  }
+
+  appendAuditLog_('REGISTRATION_MODE_UPDATED', 'Face registration', 'SUCCESS', {
+    adminUsername: adminSession.sub,
+    enabled: shouldEnable,
+    expiresAt: expiresAt
+  });
+  return { success: true, enabled: shouldEnable, expiresAt: expiresAt };
+}
+
+function requireRegistrationOpen_() {
+  const status = getRegistrationStatus();
+  if (!status.enabled) {
+    throw new Error('ขณะนี้ปิดรับลงทะเบียน กรุณาติดต่อผู้ดูแลระบบ');
+  }
+  return status;
+}
+
+function registerUser(name, faceDescriptor) {
+  const registrationStatus = requireRegistrationOpen_();
   const normalizedName = String(name || '').trim();
   if (!normalizedName) throw new Error('กรุณาระบุชื่อพนักงาน');
   if (!Array.isArray(faceDescriptor) || faceDescriptor.length === 0) {
@@ -302,9 +366,9 @@ function registerUser(name, faceDescriptor, sessionToken) {
 
   sheet.appendRow([normalizedName, JSON.stringify(faceDescriptor), new Date()]);
   appendAuditLog_('USER_REGISTERED', normalizedName, 'SUCCESS', {
-    source: 'FACE_REGISTRATION_WEB',
-    verificationStatus: 'ADMIN_AUTHORIZED',
-    adminUsername: adminSession.sub
+    source: 'SELF_REGISTRATION_WEB',
+    verificationStatus: 'ADMIN_WINDOW_AUTHORIZED',
+    registrationExpiresAt: registrationStatus.expiresAt
   });
   return { success: true, message: 'บันทึกข้อมูลหน้าเรียบร้อย' };
 }

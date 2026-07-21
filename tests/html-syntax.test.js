@@ -36,9 +36,19 @@ test('config page shows safe LINE Bot configuration status', () => {
   assert.doesNotMatch(html, /LINE_CHANNEL_ACCESS_TOKEN\s*=/);
 });
 
-test('registration page requires and forwards an admin session', () => {
+test('admin can control and share the employee registration window', () => {
+  const html = fs.readFileSync(path.join(projectRoot, 'config.html'), 'utf8');
+  assert.match(html, /action:\s*'setRegistrationMode'/);
+  assert.match(html, /action=getRegistrationStatus/);
+  assert.match(html, /id="registrationUrl"/);
+  assert.match(html, /copyRegistrationLink/);
+});
+
+test('registration page is no-login and checks the public registration window', () => {
   const html = fs.readFileSync(path.join(projectRoot, 'register.html'), 'utf8');
-  assert.match(html, /action:\s*'validateAdminSession'/);
-  assert.match(html, /sessionToken:\s*adminSessionToken/);
-  assert.match(html, /config\.html\?returnTo=register\.html/);
+  assert.match(html, /action=getRegistrationStatus/);
+  assert.match(html, /action:\s*'registerUser'/);
+  assert.doesNotMatch(html, /validateAdminSession/);
+  assert.doesNotMatch(html, /adminSessionToken/);
+  assert.doesNotMatch(html, /returnTo=register\.html/);
 });

@@ -239,8 +239,6 @@
 
 <script>
   const API_URL   = localStorage.getItem('gasApiUrl') || GAS_API_URL;
-  const AUTH_TOKEN_KEY = 'attendanceAdminSession';
-  const adminSessionToken = sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
   const video     = document.getElementById('video');
   const statusDiv = document.getElementById('status');
   const btnSave   = document.getElementById('btnSave');
@@ -251,26 +249,33 @@
   if (!API_URL) {
     statusDiv.innerHTML = '<span style="color:#f87171">❌ ยังไม่ได้ตั้งค่า API URL — <a href="config.html" style="color:#fbbf24">ไปตั้งค่า</a></span>';
   } else {
-    window.addEventListener('load', initProtectedRegistration);
+    window.addEventListener('load', initRegistrationPage);
   }
 
-  async function initProtectedRegistration() {
-    if (!adminSessionToken) {
-      window.location.replace('config.html?returnTo=register.html');
-      return;
-    }
+  async function initRegistrationPage() {
     try {
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'validateAdminSession', sessionToken: adminSessionToken })
-      });
+      const response = await fetch(API_URL + '?action=getRegistrationStatus');
       const status = await response.json();
-      if (!status.success || !status.authenticated) throw new Error(status.error || 'Session ไม่ถูกต้อง');
+      if (!status.success) throw new Error(status.error || 'ตรวจสอบสถานะไม่สำเร็จ');
+      if (!status.enabled) {
+        statusDiv.innerHTML = '<span style="color:#fbbf24">🔒 ขณะนี้ปิดรับลงทะเบียน กรุณาติดต่อผู้ดูแลระบบ</span>';
+        btnSave.disabled = true;
+        return;
+      }
+      statusDiv.innerHTML = '<span style="color:#34d399">✅ เปิดรับลงทะเบียนถึง ' + formatBangkokDateTime(status.expiresAt) + '</span>';
       await initModels();
     } catch (error) {
-      sessionStorage.removeItem(AUTH_TOKEN_KEY);
-      window.location.replace('config.html?returnTo=register.html');
+      statusDiv.innerHTML = '<span style="color:#f87171">❌ ตรวจสอบสิทธิ์ลงทะเบียนไม่ได้: ' + error.message + '</span>';
+      btnSave.disabled = true;
     }
+  }
+
+  function formatBangkokDateTime(isoValue) {
+    return new Intl.DateTimeFormat('th-TH', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: 'Asia/Bangkok'
+    }).format(new Date(isoValue));
   }
 
   function updateDots() {
@@ -334,8 +339,7 @@
         body: JSON.stringify({
           action: 'registerUser',
           name,
-          faceDescriptor: descriptorArray,
-          sessionToken: adminSessionToken
+          faceDescriptor: descriptorArray
         })
       });
       const data = await res.json();
