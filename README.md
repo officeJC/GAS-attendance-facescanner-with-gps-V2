@@ -1,6 +1,6 @@
 # 🏢 Face Scan Attendance
 
-> ระบบบันทึกเวลาเข้างานด้วยการสแกนใบหน้า + GPS Geofencing
+> ระบบบันทึกเวลาเข้า / ออกงานด้วยการสแกนใบหน้า + GPS Geofencing พร้อมแจ้ง LINE Bot
 > Deploy บน Netlify · ข้อมูลเก็บใน Google Sheets · ไม่ต้องการ Server
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
@@ -16,7 +16,9 @@
 |---------|-----------|
 | 📷 **Face Recognition** | จดจำใบหน้าด้วย face-api.js (SSD MobileNet + FaceNet) ค่า threshold 0.45 |
 | 📍 **GPS Geofencing** | ตรวจสอบตำแหน่งด้วยสูตร Haversine กำหนดรัศมีได้อิสระ |
-| 📊 **Google Sheets** | บันทึกข้อมูลพนักงาน / ประวัติเข้างาน / ตั้งค่า GPS ใน Sheets |
+| ↔️ **เข้า / ออกงาน** | เลือกบันทึกเข้างานหรือออกงานหลังระบบจับคู่ใบหน้า |
+| 💬 **LINE Bot** | แจ้งสแกนเข้า / ออกงานผ่าน LINE Messaging API พร้อม DRY_RUN และ approval flag |
+| 📊 **Google Sheets** | บันทึกข้อมูลพนักงาน / ประวัติเข้า-ออกงาน / สถานะตรวจสอบ / สถานะ LINE |
 | 🌐 **Static Hosting** | Frontend เป็น HTML/CSS/JS ล้วน Deploy Netlify ได้ทันที |
 | 📱 **Mobile-First** | ออกแบบสำหรับการใช้งานบนมือถือ responsive ทุกขนาดจอ |
 | 🌙 **Dark Glassmorphism UI** | ดีไซน์ modern dark theme พร้อม animation |
@@ -57,7 +59,7 @@
 facescanner v2/
 ├── index.html          ← หน้าเมนูหลัก
 ├── register.html       ← ลงทะเบียนใบหน้าพนักงาน
-├── scan.html           ← สแกนใบหน้าเพื่อเข้างาน
+├── scan.html           ← สแกนใบหน้าเพื่อเข้า / ออกงาน
 ├── config.html         ← ตั้งค่า GPS จุดเช็คอิน + API URL
 ├── js/
 │   └── api-config.js   ← ไฟล์เก็บ GAS Web App URL (แก้ไขก่อน Deploy)
@@ -91,6 +93,29 @@ facescanner v2/
 ```javascript
 const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 ```
+
+### Step 2.1 — ตั้งค่า LINE Bot อย่างปลอดภัย
+
+ระบบนี้ใช้ **LINE Messaging API (push message)** และไม่ใช้ LINE Notify โดยเก็บ token ไว้ใน Script Properties ฝั่ง Google Apps Script เท่านั้น
+
+1. สร้าง LINE Official Account และเปิดใช้งาน Messaging API
+2. ออก Channel access token และนำ Bot เข้าห้อง/กลุ่มปลายทาง
+3. หา `userId`, `groupId` หรือ `roomId` ของผู้รับจาก webhook event
+4. ไปที่ **Apps Script → Project Settings → Script Properties** แล้วเพิ่มค่า:
+
+| Property | ค่าเริ่มต้น / ตัวอย่าง | หมายเหตุ |
+|----------|------------------------|----------|
+| `LINE_CHANNEL_ACCESS_TOKEN` | token จาก LINE Developers | ห้ามใส่ในไฟล์หรือหน้าเว็บ |
+| `LINE_TARGET_ID` | `U...`, `C...` หรือ `R...` | user / group / room ID |
+| `LINE_DRY_RUN` | `true` | ค่าเริ่มต้นต้องเป็น `true` เพื่อไม่ส่งจริง |
+| `LINE_SEND_APPROVED` | `false` | ต้องอนุมัติก่อนเปิดส่งจริง |
+
+5. ทดสอบสแกนหนึ่งครั้ง แล้วตรวจคอลัมน์ `LINE Status` และชีต `AuditLog` ว่าเป็น `DRY_RUN`
+6. เมื่อตรวจข้อความและผู้รับถูกต้องแล้ว จึงเปลี่ยน `LINE_DRY_RUN=false` และ `LINE_SEND_APPROVED=true`
+
+> การส่งจริงจะเกิดขึ้นต่อเมื่อกำหนด token/ผู้รับครบ, ปิด DRY_RUN และเปิด approval flag แล้วเท่านั้น
+
+เอกสารอ้างอิง: [Send messages — LINE Developers](https://developers.line.biz/en/docs/messaging-api/sending-messages/)
 
 ---
 
@@ -131,7 +156,7 @@ const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 
 ---
 
-### 📷 สแกนเข้างาน — `/scan.html`
+### 📷 สแกนเข้า / ออกงาน — `/scan.html`
 
 ```
 เปิดหน้า scan.html
@@ -146,26 +171,28 @@ const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
        ↓
 ระบบสแกนทุก 500ms → พบใบหน้าตรงกัน?
        ↓ ใช่ (distance < 0.45)
-แสดง Modal ยืนยัน — กด "ยืนยันเข้างาน"
+แสดง Modal ยืนยัน — เลือก "ยืนยันเข้างาน" หรือ "ยืนยันออกงาน"
        ↓
-บันทึกใน Google Sheets (ชื่อ / เวลา / วันที่ / GPS / Map link)
+ตรวจชื่อและ GPS ซ้ำฝั่ง Apps Script
+       ↓
+บันทึกใน Google Sheets + ส่งแจ้ง LINE Bot ตามโหมดที่ตั้งไว้
 ```
 
 ---
 
-### 📊 ดูรายงานการเข้างาน
+### 📊 ดูรายงานการเข้า / ออกงาน
 
 เปิด **Google Sheets** → sheet **"Attendance"**
 
-| Name | Time | Date | Latitude | Longitude | Google Map Link |
-|------|------|------|----------|-----------|-----------------|
-| สมชาย ใจดี | 08:30:15 | 1/3/2026 | 13.7563 | 100.5018 | https://maps.google.com/... |
+| Request ID | Name | Type | Time | Date | Timestamp ISO | Latitude | Longitude | Google Map Link | Source | Verification Status | LINE Status |
+|------------|------|------|------|------|---------------|----------|-----------|-----------------|--------|---------------------|-------------|
+| UUID | สมชาย ใจดี | IN | 08:30:15 | 1/3/2026 | ISO 8601 | 13.7563 | 100.5018 | Google Maps | FACE_SCAN_WEB | CLIENT_FACE_MATCH_AND_SERVER_GPS_VALIDATED | SENT |
 
 ---
 
 ## 🗄️ โครงสร้าง Google Sheets
 
-ระบบสร้าง 3 sheets อัตโนมัติเมื่อใช้งานครั้งแรก:
+ระบบสร้าง 4 sheets อัตโนมัติเมื่อใช้งานครั้งแรก:
 
 ### 📋 Users — ข้อมูลพนักงาน
 
@@ -173,11 +200,13 @@ const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 |----------|----------|----------|
 | Name | Face Descriptor (JSON array 128D) | Registered At |
 
-### 📋 Attendance — ประวัติเข้างาน
+### 📋 Attendance — ประวัติเข้า / ออกงาน
 
-| Column A | Column B | Column C | Column D | Column E | Column F |
-|----------|----------|----------|----------|----------|----------|
-| Name | Time | Date | Latitude | Longitude | Google Map Link |
+| A | B | C | D | E | F | G | H | I | J | K | L |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Request ID | Name | Type | Time | Date | Timestamp ISO | Latitude | Longitude | Google Map Link | Source | Verification Status | LINE Status |
+
+เมื่อบันทึกรายการใหม่ครั้งแรก ระบบจะย้ายข้อมูล Attendance รูปแบบเดิมให้อัตโนมัติ โดยกำหนด `Type=IN`, `Source=LEGACY_ATTENDANCE_SHEET` และ `Verification Status=UNVERIFIED_LEGACY_RECORD` เพื่อไม่ตีความข้อมูลเก่าเป็นข้อเท็จจริงที่ยืนยันแล้ว
 
 ### 📋 Config — การตั้งค่า GPS
 
@@ -186,6 +215,10 @@ const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 | Target Latitude | 13.7563 |
 | Target Longitude | 100.5018 |
 | Allowed Radius (KM) | 0.1 |
+
+### 📋 AuditLog — ประวัติการทำรายการสำคัญ
+
+เก็บเวลาแบบ ISO 8601, action, actor, target, outcome และรายละเอียดของการลงทะเบียนใบหน้า การบันทึกเวลา การแก้ GPS และการส่ง LINE โดยไม่บันทึก Channel access token
 
 ---
 

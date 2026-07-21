@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>สแกนเข้างาน</title>
+  <title>สแกนลงเวลาเข้า / ออกงาน</title>
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
   <script src="js/api-config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.js"></script>
@@ -238,6 +238,18 @@
       transform: translateY(-1px);
     }
     .btn-confirm:disabled { background: rgba(255,255,255,0.08); color: #475569; box-shadow: none; }
+    .btn-checkout {
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: white;
+      padding: 17px; font-size: 20px; font-weight: 700;
+      box-shadow: 0 4px 20px rgba(249,115,22,0.3);
+      margin-bottom: 10px;
+    }
+    .btn-checkout:hover:not(:disabled) {
+      box-shadow: 0 8px 30px rgba(249,115,22,0.45);
+      transform: translateY(-1px);
+    }
+    .btn-checkout:disabled { background: rgba(255,255,255,0.08); color: #475569; box-shadow: none; }
     .btn-cancel {
       background: rgba(239,68,68,0.1);
       border: 1px solid rgba(239,68,68,0.25);
@@ -259,7 +271,7 @@
 
   <div class="top-bar">
     <a href="index.html" class="back-btn">← กลับ</a>
-    <h2>📷 สแกนเข้างาน</h2>
+    <h2>📷 สแกนลงเวลาเข้า / ออกงาน</h2>
     <div class="spacer"></div>
   </div>
 
@@ -296,7 +308,8 @@
     <div class="user-name" id="modalName">...</div>
     <div id="modalTime" class="time-badge">00:00</div>
     <div id="modalScore" class="score-text"></div>
-    <button class="btn btn-confirm" id="btnConfirm" onclick="confirmAttendance()">✅ ยืนยันเข้างาน</button>
+    <button class="btn btn-confirm" id="btnCheckIn" onclick="confirmAttendance('IN')">✅ ยืนยันเข้างาน</button>
+    <button class="btn btn-checkout" id="btnCheckOut" onclick="confirmAttendance('OUT')">🚪 ยืนยันออกงาน</button>
     <button class="btn btn-cancel" onclick="cancelAttendance()">ไม่ใช่ฉัน</button>
   </div>
 </div>
@@ -316,6 +329,8 @@
   let knownFaces   = [];
   let scanInterval = null;
   let currentMatch = null;
+  let currentFaceDistance = null;
+  let currentRequestId = null;
   let currentLat   = null;
   let currentLng   = null;
 
@@ -475,11 +490,13 @@
   // ===== Modal =====
   function showModal(match) {
     currentMatch = match.name;
+    currentFaceDistance = match.distance;
+    currentRequestId = createRequestId();
     document.getElementById('modalName').innerText  = match.name;
 
     const now = new Date();
     const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('modalTime').innerText  = 'เวลาเข้างาน: ' + timeStr + ' น.';
+    document.getElementById('modalTime').innerText  = 'เวลาสแกน: ' + timeStr + ' น.';
 
     const pct = ((1 - match.distance) * 100).toFixed(1);
     document.getElementById('modalScore').innerText = 'ความเหมือน: ' + pct + '%';
@@ -488,29 +505,45 @@
     mainStatus.innerText = 'กรุณายืนยัน...';
   }
 
-  async function confirmAttendance() {
-    const btn = document.getElementById('btnConfirm');
-    btn.disabled   = true;
-    btn.innerText  = 'กำลังบันทึก...';
+  async function confirmAttendance(attendanceType) {
+    const btnCheckIn = document.getElementById('btnCheckIn');
+    const btnCheckOut = document.getElementById('btnCheckOut');
+    btnCheckIn.disabled = true;
+    btnCheckOut.disabled = true;
+    const selectedButton = attendanceType === 'IN' ? btnCheckIn : btnCheckOut;
+    selectedButton.innerText = 'กำลังบันทึก...';
 
     try {
       const res = await fetch(API_URL, {
         method: 'POST',
-        body: JSON.stringify({ action: 'logAttendance', name: currentMatch, lat: currentLat, lng: currentLng })
+        body: JSON.stringify({
+          action: 'logAttendance',
+          name: currentMatch,
+          lat: currentLat,
+          lng: currentLng,
+          attendanceType,
+          faceDistance: currentFaceDistance,
+          requestId: currentRequestId
+        })
       });
       const data = await res.json();
-      alert('✅ ' + (data.message || 'บันทึกเวลาสำเร็จ'));
+      if (!data.success) throw new Error(data.error || 'บันทึกเวลาไม่สำเร็จ');
+      alert('✅ ' + (data.message || 'บันทึกเวลาสำเร็จ') + '\nLINE: ' + getLineStatusLabel(data.notificationStatus));
       window.location.href = 'index.html';
     } catch (e) {
       alert('❌ บันทึกล้มเหลว: ' + e.message);
-      btn.disabled  = false;
-      btn.innerText = '✅ ยืนยันเข้างาน';
+      btnCheckIn.disabled = false;
+      btnCheckOut.disabled = false;
+      btnCheckIn.innerText = '✅ ยืนยันเข้างาน';
+      btnCheckOut.innerText = '🚪 ยืนยันออกงาน';
     }
   }
 
   function cancelAttendance() {
     confirmModal.style.display = 'none';
     currentMatch = null;
+    currentFaceDistance = null;
+    currentRequestId = null;
     if (scanInterval) clearInterval(scanInterval);
 
     if (video.srcObject) {
@@ -528,6 +561,26 @@
   }
 
   // ===== Helpers =====
+  function createRequestId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(char) {
+      const random = Math.floor(Math.random() * 16);
+      const value = char === 'x' ? random : (random & 0x3) | 0x8;
+      return value.toString(16);
+    });
+  }
+
+  function getLineStatusLabel(status) {
+    if (status === 'SENT') return 'ส่งแจ้งเตือนแล้ว';
+    if (status === 'DRY_RUN') return 'โหมดทดสอบ (ยังไม่ส่งจริง)';
+    if (status === 'BLOCKED_APPROVAL_REQUIRED') return 'รออนุมัติการส่งจริง';
+    if (status === 'NOT_CONFIGURED') return 'ยังตั้งค่า LINE Bot ไม่ครบ';
+    if (status && status.indexOf('FAILED_') === 0) return 'ส่งไม่สำเร็จ (' + status + ')';
+    return status || 'ไม่ทราบสถานะ';
+  }
+
   function showError(msg) {
     mainStatus.innerHTML = '<span style="color:#f87171">❌ ' + msg + '</span>';
   }

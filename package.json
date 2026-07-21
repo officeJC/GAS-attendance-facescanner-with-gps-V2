@@ -1,0 +1,7 @@
+{
+  "name": "gas-attendance-facescanner-with-gps-v2",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

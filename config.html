@@ -188,7 +188,7 @@
   <div class="page-header">
     <a href="index.html" class="back-btn">← กลับ</a>
     <h2>⚙️ ตั้งค่าระบบ</h2>
-    <p class="page-subtitle">จัดการ API และจุดเช็คอิน GPS</p>
+    <p class="page-subtitle">จัดการ API จุดลงเวลา GPS และตรวจสถานะ LINE Bot</p>
   </div>
 
   <!-- API URL Card -->
@@ -207,7 +207,7 @@
   <div class="card">
     <div class="section-header">
       <div class="section-icon cyan">📍</div>
-      <span class="section-title-text">จุดเช็คอิน GPS</span>
+      <span class="section-title-text">จุดลงเวลา GPS</span>
     </div>
 
     <button class="btn btn-get-loc" onclick="getCurrentLocation()">
@@ -230,6 +230,16 @@
     <p class="note">* ใส่ 0 หากไม่ต้องการจำกัดพื้นที่</p>
   </div>
 
+  <!-- LINE Bot Status Card -->
+  <div class="card">
+    <div class="section-header">
+      <div class="section-icon cyan">💬</div>
+      <span class="section-title-text">สถานะ LINE Bot</span>
+    </div>
+    <div id="lineBotStatus" class="note">กำลังตรวจสอบการตั้งค่า...</div>
+    <p class="note">ตั้งค่า token และผู้รับใน Apps Script → Project Settings → Script Properties เท่านั้น ไม่เก็บ secret ในหน้าเว็บนี้</p>
+  </div>
+
   <!-- Actions -->
   <button class="btn btn-save" onclick="saveAll()">
     💾 บันทึกการตั้งค่าทั้งหมด
@@ -249,6 +259,7 @@
 
     if (savedUrl) {
       loadGpsConfig(savedUrl);
+      loadLineBotStatus(savedUrl);
     }
   };
 
@@ -261,6 +272,22 @@
         document.getElementById('radius').value = config.radius || '0.5';
       })
       .catch(() => {}); // ถ้าโหลดไม่ได้ก็ข้ามไป
+  }
+
+  function loadLineBotStatus(apiUrl) {
+    const statusElement = document.getElementById('lineBotStatus');
+    fetch(apiUrl + '?action=getLineBotStatus')
+      .then(r => r.json())
+      .then(status => {
+        if (!status.success) throw new Error(status.error || 'โหลดสถานะไม่ได้');
+        const configured = status.configured ? '✅ ตั้งค่า token/ผู้รับแล้ว' : '⚠️ ยังตั้งค่า token/ผู้รับไม่ครบ';
+        const mode = status.dryRun ? '🧪 DRY_RUN (ยังไม่ส่งจริง)' : '📤 โหมดส่งจริง';
+        const approval = status.approved ? '✅ อนุมัติแล้ว' : '🔒 ยังไม่อนุมัติการส่งจริง';
+        statusElement.innerText = configured + '\n' + mode + '\n' + approval;
+      })
+      .catch(error => {
+        statusElement.innerText = '❌ ตรวจสอบสถานะ LINE Bot ไม่ได้: ' + error.message;
+      });
   }
 
   function getCurrentLocation() {
@@ -294,7 +321,9 @@
         body: JSON.stringify({ action: 'saveConfig', lat, lng, radius })
       });
       const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'บันทึกการตั้งค่าไม่สำเร็จ');
       showMsg('✅ ' + (data.message || 'บันทึกสำเร็จ'), 'success');
+      loadLineBotStatus(apiUrl);
     } catch (e) {
       showMsg('❌ เชื่อมต่อ API ไม่ได้: ' + e.message, 'error');
     }
