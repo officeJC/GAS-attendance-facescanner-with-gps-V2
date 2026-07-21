@@ -18,6 +18,7 @@
 | 📍 **GPS Geofencing** | ตรวจสอบตำแหน่งด้วยสูตร Haversine กำหนดรัศมีได้อิสระ |
 | ↔️ **เข้า / ออกงาน** | เลือกบันทึกเข้างานหรือออกงานหลังระบบจับคู่ใบหน้า |
 | 💬 **LINE Bot** | แจ้งสแกนเข้า / ออกงานผ่าน LINE Messaging API พร้อม DRY_RUN และ approval flag |
+| 🔐 **Admin Login** | ป้องกันหน้า Settings และการลงทะเบียนใบหน้าด้วย signed session, salted password hash และ rate limit |
 | 📊 **Google Sheets** | บันทึกข้อมูลพนักงาน / ประวัติเข้า-ออกงาน / สถานะตรวจสอบ / สถานะ LINE |
 | 🌐 **Static Hosting** | Frontend เป็น HTML/CSS/JS ล้วน Deploy Netlify ได้ทันที |
 | 📱 **Mobile-First** | ออกแบบสำหรับการใช้งานบนมือถือ responsive ทุกขนาดจอ |
@@ -94,7 +95,32 @@ facescanner v2/
 const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 ```
 
-### Step 2.1 — ตั้งค่า LINE Bot อย่างปลอดภัย
+### Step 2.1 — ตั้งค่าผู้ดูแลระบบ
+
+การแก้ไข GPS, การดูสถานะ LINE Bot และการลงทะเบียนใบหน้าต้องผ่านการล็อกอินผู้ดูแล โดยตรวจสิทธิ์ซ้ำที่ Google Apps Script ฝั่งเซิร์ฟเวอร์
+
+1. ไปที่ **Apps Script → Project Settings → Script Properties**
+2. เพิ่มค่าชั่วคราวสองรายการ:
+
+| Property | ตัวอย่าง | หมายเหตุ |
+|----------|----------|----------|
+| `ADMIN_USERNAME` | `admin` | 3-64 ตัว ใช้ตัวอักษร ตัวเลข จุด ขีดกลาง หรือขีดล่าง |
+| `ADMIN_BOOTSTRAP_PASSWORD` | รหัสผ่านยาวอย่างน้อย 12 ตัว | ใช้ครั้งเดียวและห้ามใส่ในไฟล์โค้ด |
+| `AUTH_SESSION_TTL_MINUTES` | `60` | ไม่บังคับ กำหนดได้ 5-480 นาที |
+
+3. กลับไป Apps Script Editor เลือกฟังก์ชัน `initializeAdminLogin` แล้วกด **Run** หนึ่งครั้ง
+4. ตรวจ Script Properties ว่า `ADMIN_BOOTSTRAP_PASSWORD` ถูกลบ และมีค่าต่อไปนี้เพิ่มขึ้น:
+   - `ADMIN_PASSWORD_SALT`
+   - `ADMIN_PASSWORD_HASH`
+   - `AUTH_SESSION_SECRET`
+   - `AUTH_REVOKED_BEFORE`
+5. Deploy Apps Script เป็น **New version**
+
+> เมื่อต้องการเปลี่ยนรหัสผ่าน ให้เพิ่ม `ADMIN_BOOTSTRAP_PASSWORD` ค่าใหม่ แล้ว Run `initializeAdminLogin` อีกครั้ง ระบบจะ hash รหัสใหม่ ลบรหัสชั่วคราว และยกเลิก session เก่าทั้งหมด
+
+ระบบจำกัดการลองรหัสผิด 5 ครั้งต่อชื่อผู้ใช้เป็นเวลา 15 นาที และ session หมดอายุใน 60 นาทีโดยค่าเริ่มต้น
+
+### Step 2.2 — ตั้งค่า LINE Bot อย่างปลอดภัย
 
 ระบบนี้ใช้ **LINE Messaging API (push message)** และไม่ใช้ LINE Notify โดยเก็บ token ไว้ใน Script Properties ฝั่ง Google Apps Script เท่านั้น
 
@@ -136,10 +162,11 @@ const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 ### Step 4 — ตั้งค่าระบบครั้งแรก
 
 1. เปิด `https://your-site.netlify.app/config.html`
-2. ตรวจสอบว่า **GAS URL** ในช่องบนถูกต้อง
-3. กด **"ดึงตำแหน่งปัจจุบัน"** หรือกรอก Latitude / Longitude ของจุดเช็คอิน
-4. ระบุ **รัศมี** ที่ยอมรับ (หน่วย: กิโลเมตร) เช่น `0.1` คือ 100 เมตร
-5. กด **"บันทึกการตั้งค่าทั้งหมด"**
+2. กรอก GAS URL, `ADMIN_USERNAME` และรหัสผ่านผู้ดูแล
+3. เมื่อล็อกอินสำเร็จ ตรวจสอบว่า **GAS URL** ถูกต้อง
+4. กด **"ดึงตำแหน่งปัจจุบัน"** หรือกรอก Latitude / Longitude ของจุดเช็คอิน
+5. ระบุ **รัศมี** ที่ยอมรับ (หน่วย: กิโลเมตร) เช่น `0.1` คือ 100 เมตร
+6. กด **"บันทึกการตั้งค่าทั้งหมด"**
 
 ---
 
@@ -147,10 +174,12 @@ const GAS_API_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 
 ### 👤 ลงทะเบียนพนักงานใหม่ — `/register.html`
 
-1. กรอกชื่อ-นามสกุลพนักงาน
-2. มองกล้อง **ตรงๆ** แล้วกด **"บันทึกใบหน้า"** (ครั้งที่ 1)
-3. **หันซ้ายเล็กน้อย** กด **"บันทึกเพิ่ม"** (ครั้งที่ 2)
-4. **หันขวาเล็กน้อย** กด **"บันทึกเพิ่ม"** (ครั้งที่ 3)
+1. ล็อกอินผู้ดูแลผ่าน `/config.html` ในแท็บเดียวกันก่อน
+2. เปิด `/register.html` หาก session หมดอายุ ระบบจะส่งกลับไปหน้าล็อกอิน
+3. กรอกชื่อ-นามสกุลพนักงาน
+4. มองกล้อง **ตรงๆ** แล้วกด **"บันทึกใบหน้า"** (ครั้งที่ 1)
+5. **หันซ้ายเล็กน้อย** กด **"บันทึกเพิ่ม"** (ครั้งที่ 2)
+6. **หันขวาเล็กน้อย** กด **"บันทึกเพิ่ม"** (ครั้งที่ 3)
 
 > 💡 บันทึกอย่างน้อย 3 มุมเพื่อความแม่นยำสูงสุด
 

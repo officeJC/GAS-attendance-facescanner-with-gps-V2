@@ -170,25 +170,68 @@
       margin: 4px 0 18px;
     }
 
-    #msg {
+    #msg, #loginMsg {
       margin-top: 14px; min-height: 22px;
       font-size: 0.9em; font-weight: 600;
       text-align: center;
     }
     .msg-success { color: #34d399; }
     .msg-error   { color: #f87171; }
+    .hidden { display: none !important; }
+    .login-icon { font-size: 52px; text-align: center; margin-bottom: 12px; }
+    .login-title { text-align: center; margin-bottom: 6px; }
+    .login-subtitle { color: #64748b; text-align: center; font-size: 0.86em; margin-bottom: 22px; }
+    .user-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin-bottom: 16px; padding: 10px 14px;
+      background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2);
+      border-radius: 12px; color: #a7f3d0; font-size: 0.85em;
+    }
+    .btn-logout {
+      border: 1px solid rgba(248,113,113,0.3); background: rgba(248,113,113,0.08);
+      color: #fca5a5; border-radius: 8px; padding: 6px 10px; cursor: pointer;
+      font-family: 'Sarabun', sans-serif;
+    }
 
     /* Animation */
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
-<div class="container">
+<div class="container" id="loginView">
+  <div class="page-header">
+    <a href="index.html" class="back-btn">← กลับ</a>
+  </div>
+  <form class="card" id="loginForm">
+    <div class="login-icon">🔐</div>
+    <h2 class="login-title">เข้าสู่ระบบผู้ดูแล</h2>
+    <p class="login-subtitle">ต้องยืนยันตัวตนก่อนแก้ไขการตั้งค่าระบบ</p>
+
+    <label for="loginApiUrl">GOOGLE APPS SCRIPT API</label>
+    <input type="url" id="loginApiUrl" placeholder="https://script.google.com/macros/s/.../exec" required>
+
+    <label for="adminUsername">ชื่อผู้ใช้</label>
+    <input type="text" id="adminUsername" autocomplete="username" maxlength="64" required>
+
+    <label for="adminPassword">รหัสผ่าน</label>
+    <input type="password" id="adminPassword" autocomplete="current-password" required>
+
+    <button class="btn btn-save" id="btnLogin" type="submit">เข้าสู่ระบบ</button>
+    <div id="loginMsg"></div>
+  </form>
+</div>
+
+<div class="container hidden" id="adminView">
 
   <div class="page-header">
     <a href="index.html" class="back-btn">← กลับ</a>
     <h2>⚙️ ตั้งค่าระบบ</h2>
     <p class="page-subtitle">จัดการ API จุดลงเวลา GPS และตรวจสถานะ LINE Bot</p>
+  </div>
+
+  <div class="user-bar">
+    <span>👤 ผู้ดูแล: <strong id="loggedInUsername">-</strong></span>
+    <button type="button" class="btn-logout" onclick="logoutAdmin()">ออกจากระบบ</button>
   </div>
 
   <!-- API URL Card -->
@@ -199,8 +242,8 @@
     </div>
 
     <label>WEB APP URL</label>
-    <input type="url" id="apiUrl" placeholder="https://script.google.com/macros/s/.../exec">
-    <p class="note">Deploy GAS แล้วนำ URL มาวางที่นี่ (Execute as: Me / Anyone can access)</p>
+    <input type="url" id="apiUrl" placeholder="https://script.google.com/macros/s/.../exec" readonly>
+    <p class="note">API ที่ใช้เข้าสู่ระบบ หากต้องการเปลี่ยนให้กดออกจากระบบก่อน</p>
   </div>
 
   <!-- GPS Config Card -->
@@ -250,18 +293,100 @@
 </div>
 
 <script>
+  const AUTH_TOKEN_KEY = 'attendanceAdminSession';
+  const loginView = document.getElementById('loginView');
+  const adminView = document.getElementById('adminView');
+  const loginMsg = document.getElementById('loginMsg');
   const msgDiv = document.getElementById('msg');
+  let adminSessionToken = sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
+  let activeApiUrl = '';
 
-  // โหลดค่าที่บันทึกไว้
-  window.onload = function() {
+  document.getElementById('loginForm').addEventListener('submit', loginAdmin);
+
+  window.onload = async function() {
     const savedUrl = localStorage.getItem('gasApiUrl') || GAS_API_URL;
+    document.getElementById('loginApiUrl').value = savedUrl;
     document.getElementById('apiUrl').value = savedUrl;
 
-    if (savedUrl) {
-      loadGpsConfig(savedUrl);
-      loadLineBotStatus(savedUrl);
+    if (savedUrl && adminSessionToken) {
+      try {
+        const status = await postApi(savedUrl, {
+          action: 'validateAdminSession',
+          sessionToken: adminSessionToken
+        });
+        if (!status.success) throw new Error(status.error || 'Session ไม่ถูกต้อง');
+        activateAdminView(savedUrl, status.username);
+        return;
+      } catch (error) {
+        sessionStorage.removeItem(AUTH_TOKEN_KEY);
+        adminSessionToken = '';
+        showLoginMsg('Session หมดอายุ กรุณาเข้าสู่ระบบใหม่', 'error');
+      }
     }
   };
+
+  async function loginAdmin(event) {
+    event.preventDefault();
+    const apiUrl = document.getElementById('loginApiUrl').value.trim();
+    const username = document.getElementById('adminUsername').value.trim();
+    const password = document.getElementById('adminPassword').value;
+    const button = document.getElementById('btnLogin');
+
+    if (!apiUrl || !username || !password) return showLoginMsg('กรุณากรอกข้อมูลให้ครบ', 'error');
+    button.disabled = true;
+    button.innerText = 'กำลังตรวจสอบ...';
+    showLoginMsg('', '');
+
+    try {
+      const result = await postApi(apiUrl, { action: 'loginAdmin', username, password });
+      if (!result.success || !result.sessionToken) {
+        throw new Error(result.error || 'เข้าสู่ระบบไม่สำเร็จ');
+      }
+      activeApiUrl = apiUrl;
+      adminSessionToken = result.sessionToken;
+      localStorage.setItem('gasApiUrl', apiUrl);
+      sessionStorage.setItem(AUTH_TOKEN_KEY, adminSessionToken);
+      document.getElementById('adminPassword').value = '';
+      activateAdminView(apiUrl, result.username);
+    } catch (error) {
+      showLoginMsg(error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.innerText = 'เข้าสู่ระบบ';
+    }
+  }
+
+  function activateAdminView(apiUrl, username) {
+    activeApiUrl = apiUrl;
+    document.getElementById('apiUrl').value = apiUrl;
+    document.getElementById('loggedInUsername').innerText = username || '-';
+    loginView.classList.add('hidden');
+    adminView.classList.remove('hidden');
+
+    const returnTo = new URLSearchParams(window.location.search).get('returnTo');
+    if (returnTo === 'register.html') {
+      window.location.href = 'register.html';
+      return;
+    }
+    loadGpsConfig(apiUrl);
+    loadLineBotStatus(apiUrl);
+  }
+
+  function logoutAdmin() {
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    adminSessionToken = '';
+    adminView.classList.add('hidden');
+    loginView.classList.remove('hidden');
+    showLoginMsg('ออกจากระบบแล้ว', 'success');
+  }
+
+  async function postApi(apiUrl, payload) {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    return response.json();
+  }
 
   function loadGpsConfig(apiUrl) {
     fetch(apiUrl + '?action=getConfig')
@@ -274,20 +399,21 @@
       .catch(() => {}); // ถ้าโหลดไม่ได้ก็ข้ามไป
   }
 
-  function loadLineBotStatus(apiUrl) {
+  async function loadLineBotStatus(apiUrl) {
     const statusElement = document.getElementById('lineBotStatus');
-    fetch(apiUrl + '?action=getLineBotStatus')
-      .then(r => r.json())
-      .then(status => {
-        if (!status.success) throw new Error(status.error || 'โหลดสถานะไม่ได้');
-        const configured = status.configured ? '✅ ตั้งค่า token/ผู้รับแล้ว' : '⚠️ ยังตั้งค่า token/ผู้รับไม่ครบ';
-        const mode = status.dryRun ? '🧪 DRY_RUN (ยังไม่ส่งจริง)' : '📤 โหมดส่งจริง';
-        const approval = status.approved ? '✅ อนุมัติแล้ว' : '🔒 ยังไม่อนุมัติการส่งจริง';
-        statusElement.innerText = configured + '\n' + mode + '\n' + approval;
-      })
-      .catch(error => {
-        statusElement.innerText = '❌ ตรวจสอบสถานะ LINE Bot ไม่ได้: ' + error.message;
+    try {
+      const status = await postApi(apiUrl, {
+        action: 'getLineBotStatus',
+        sessionToken: adminSessionToken
       });
+      if (!status.success) throw new Error(status.error || 'โหลดสถานะไม่ได้');
+      const configured = status.configured ? '✅ ตั้งค่า token/ผู้รับแล้ว' : '⚠️ ยังตั้งค่า token/ผู้รับไม่ครบ';
+      const mode = status.dryRun ? '🧪 DRY_RUN (ยังไม่ส่งจริง)' : '📤 โหมดส่งจริง';
+      const approval = status.approved ? '✅ อนุมัติแล้ว' : '🔒 ยังไม่อนุมัติการส่งจริง';
+      statusElement.innerText = configured + '\n' + mode + '\n' + approval;
+    } catch (error) {
+      statusElement.innerText = '❌ ตรวจสอบสถานะ LINE Bot ไม่ได้: ' + error.message;
+    }
   }
 
   function getCurrentLocation() {
@@ -303,7 +429,7 @@
   }
 
   async function saveAll() {
-    const apiUrl = document.getElementById('apiUrl').value.trim();
+    const apiUrl = activeApiUrl || document.getElementById('apiUrl').value.trim();
     const lat    = document.getElementById('lat').value;
     const lng    = document.getElementById('lng').value;
     const radius = document.getElementById('radius').value;
@@ -318,7 +444,7 @@
     try {
       const res = await fetch(apiUrl, {
         method: 'POST',
-        body: JSON.stringify({ action: 'saveConfig', lat, lng, radius })
+        body: JSON.stringify({ action: 'saveConfig', lat, lng, radius, sessionToken: adminSessionToken })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'บันทึกการตั้งค่าไม่สำเร็จ');
@@ -332,6 +458,11 @@
   function showMsg(text, type) {
     msgDiv.innerText = text;
     msgDiv.className = type === 'success' ? 'msg-success' : type === 'error' ? 'msg-error' : '';
+  }
+
+  function showLoginMsg(text, type) {
+    loginMsg.innerText = text;
+    loginMsg.className = type === 'success' ? 'msg-success' : type === 'error' ? 'msg-error' : '';
   }
 </script>
 </body>

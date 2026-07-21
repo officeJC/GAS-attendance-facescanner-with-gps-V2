@@ -29,6 +29,16 @@ test('scan page offers explicit check-in and check-out actions', () => {
 
 test('config page shows safe LINE Bot configuration status', () => {
   const html = fs.readFileSync(path.join(projectRoot, 'config.html'), 'utf8');
-  assert.match(html, /action=getLineBotStatus/);
+  assert.match(html, /action:\s*'getLineBotStatus'/);
+  assert.match(html, /action:\s*'loginAdmin'/);
+  assert.match(html, /action:\s*'validateAdminSession'/);
+  assert.match(html, /sessionStorage\.setItem\(AUTH_TOKEN_KEY/);
   assert.doesNotMatch(html, /LINE_CHANNEL_ACCESS_TOKEN\s*=/);
+});
+
+test('registration page requires and forwards an admin session', () => {
+  const html = fs.readFileSync(path.join(projectRoot, 'register.html'), 'utf8');
+  assert.match(html, /action:\s*'validateAdminSession'/);
+  assert.match(html, /sessionToken:\s*adminSessionToken/);
+  assert.match(html, /config\.html\?returnTo=register\.html/);
 });

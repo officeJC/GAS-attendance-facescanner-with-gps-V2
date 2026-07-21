@@ -7,6 +7,9 @@
 const APP_TIME_ZONE = 'Asia/Bangkok';
 const FACE_MATCH_THRESHOLD = 0.45;
 const LINE_PUSH_ENDPOINT = 'https://api.line.me/v2/bot/message/push';
+const ADMIN_SESSION_VERSION = 1;
+const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
+const ADMIN_LOGIN_LOCK_SECONDS = 900;
 const ATTENDANCE_HEADERS = [
   'Request ID',
   'Name',
@@ -28,7 +31,6 @@ function doGet(e) {
   try {
     if (action === 'getConfig') return jsonResponse_(getConfig());
     if (action === 'getKnownFaces') return jsonResponse_(getKnownFaces());
-    if (action === 'getLineBotStatus') return jsonResponse_(getLineBotStatus());
     return jsonResponse_({ success: false, error: 'Unknown action: ' + action });
   } catch (error) {
     return jsonResponse_({ success: false, error: getErrorMessage_(error) });
@@ -45,8 +47,17 @@ function doPost(e) {
 
   try {
     const action = data.action;
+    if (action === 'loginAdmin') {
+      return jsonResponse_(loginAdmin(data.username, data.password));
+    }
+    if (action === 'validateAdminSession') {
+      return jsonResponse_(validateAdminSession(data.sessionToken));
+    }
+    if (action === 'getLineBotStatus') {
+      return jsonResponse_(getLineBotStatus(data.sessionToken));
+    }
     if (action === 'registerUser') {
-      return jsonResponse_(registerUser(data.name, data.faceDescriptor));
+      return jsonResponse_(registerUser(data.name, data.faceDescriptor, data.sessionToken));
     }
     if (action === 'logAttendance') {
       return jsonResponse_(logAttendance(
@@ -59,7 +70,7 @@ function doPost(e) {
       ));
     }
     if (action === 'saveConfig') {
-      return jsonResponse_(saveConfig(data.lat, data.lng, data.radius));
+      return jsonResponse_(saveConfig(data.lat, data.lng, data.radius, data.sessionToken));
     }
     return jsonResponse_({ success: false, error: 'Unknown action: ' + action });
   } catch (error) {
@@ -77,8 +88,205 @@ function getErrorMessage_(error) {
   return error && error.message ? error.message : String(error);
 }
 
+// --- ระบบยืนยันตัวตนผู้ดูแล ---
+// วิธีเริ่มต้น:
+// 1) ตั้ง ADMIN_USERNAME และ ADMIN_BOOTSTRAP_PASSWORD ใน Script Properties
+// 2) Run ฟังก์ชัน initializeAdminLogin() จาก Apps Script Editor หนึ่งครั้ง
+// ฟังก์ชันจะสร้าง salted hash และลบ ADMIN_BOOTSTRAP_PASSWORD ให้อัตโนมัติ
+function initializeAdminLogin() {
+  const properties = PropertiesService.getScriptProperties();
+  const username = String(properties.getProperty('ADMIN_USERNAME') || '').trim();
+  const bootstrapPassword = String(properties.getProperty('ADMIN_BOOTSTRAP_PASSWORD') || '');
+
+  if (!/^[A-Za-z0-9._-]{3,64}$/.test(username)) {
+    throw new Error('ADMIN_USERNAME ต้องยาว 3-64 ตัว และใช้ตัวอักษร ตัวเลข จุด ขีดกลาง หรือขีดล่าง');
+  }
+  if (bootstrapPassword.length < 12) {
+    throw new Error('ADMIN_BOOTSTRAP_PASSWORD ต้องยาวอย่างน้อย 12 ตัวอักษร');
+  }
+
+  const salt = Utilities.getUuid() + Utilities.getUuid();
+  const passwordHash = hashPassword_(bootstrapPassword, salt);
+  const sessionSecret = properties.getProperty('AUTH_SESSION_SECRET') ||
+    Utilities.getUuid() + Utilities.getUuid() + Utilities.getUuid();
+
+  properties.setProperties({
+    ADMIN_PASSWORD_SALT: salt,
+    ADMIN_PASSWORD_HASH: passwordHash,
+    AUTH_SESSION_SECRET: sessionSecret,
+    AUTH_REVOKED_BEFORE: String(Date.now())
+  }, false);
+  properties.deleteProperty('ADMIN_BOOTSTRAP_PASSWORD');
+
+  appendAuditLog_('ADMIN_CREDENTIALS_INITIALIZED', username, 'SUCCESS', {
+    source: 'APPS_SCRIPT_EDITOR',
+    bootstrapPasswordDeleted: true
+  });
+  return 'ตั้งค่าผู้ดูแลเรียบร้อย และลบรหัสผ่านเริ่มต้นแล้ว';
+}
+
+function loginAdmin(username, password) {
+  const normalizedUsername = String(username || '').trim();
+  const rawPassword = String(password || '');
+  const properties = PropertiesService.getScriptProperties();
+  const configuredUsername = String(properties.getProperty('ADMIN_USERNAME') || '').trim();
+  const passwordSalt = properties.getProperty('ADMIN_PASSWORD_SALT');
+  const passwordHash = properties.getProperty('ADMIN_PASSWORD_HASH');
+  const sessionSecret = properties.getProperty('AUTH_SESSION_SECRET');
+
+  if (!configuredUsername || !passwordSalt || !passwordHash || !sessionSecret) {
+    throw new Error('ระบบล็อกอินยังไม่ได้ตั้งค่า กรุณา Run initializeAdminLogin()');
+  }
+
+  const cache = CacheService.getScriptCache();
+  const attemptKey = getLoginAttemptKey_(normalizedUsername);
+  const failedAttempts = Number(cache.get(attemptKey) || 0);
+  if (failedAttempts >= ADMIN_LOGIN_MAX_ATTEMPTS) {
+    appendAuditLog_('ADMIN_LOGIN', normalizedUsername || 'UNKNOWN', 'RATE_LIMITED', {
+      source: 'CONFIG_LOGIN'
+    });
+    throw new Error('พยายามเข้าสู่ระบบเกินกำหนด กรุณารอ 15 นาที');
+  }
+
+  const validUsername = constantTimeEquals_(normalizedUsername, configuredUsername);
+  const submittedHash = hashPassword_(rawPassword, passwordSalt);
+  const validPassword = constantTimeEquals_(submittedHash, passwordHash);
+  if (!validUsername || !validPassword) {
+    cache.put(attemptKey, String(failedAttempts + 1), ADMIN_LOGIN_LOCK_SECONDS);
+    appendAuditLog_('ADMIN_LOGIN', normalizedUsername || 'UNKNOWN', 'FAILED', {
+      source: 'CONFIG_LOGIN',
+      reason: 'INVALID_CREDENTIALS'
+    });
+    throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+  }
+
+  cache.remove(attemptKey);
+  const nowMs = Date.now();
+  const ttlMinutes = getAdminSessionTtlMinutes_();
+  const payload = {
+    v: ADMIN_SESSION_VERSION,
+    sub: configuredUsername,
+    role: 'ADMIN',
+    iat: nowMs,
+    exp: nowMs + ttlMinutes * 60 * 1000,
+    jti: Utilities.getUuid()
+  };
+  const token = createSignedSessionToken_(payload, sessionSecret);
+
+  appendAuditLog_('ADMIN_LOGIN', configuredUsername, 'SUCCESS', {
+    source: 'CONFIG_LOGIN',
+    sessionExpiresAt: new Date(payload.exp).toISOString()
+  });
+  return {
+    success: true,
+    sessionToken: token,
+    username: configuredUsername,
+    expiresAt: new Date(payload.exp).toISOString()
+  };
+}
+
+function validateAdminSession(sessionToken) {
+  const session = requireAdminSession_(sessionToken);
+  return {
+    success: true,
+    authenticated: true,
+    username: session.sub,
+    expiresAt: new Date(session.exp).toISOString()
+  };
+}
+
+function requireAdminSession_(sessionToken) {
+  const token = String(sessionToken || '');
+  const parts = token.split('.');
+  if (parts.length !== 2) throw new Error('กรุณาเข้าสู่ระบบผู้ดูแล');
+
+  const properties = PropertiesService.getScriptProperties();
+  const sessionSecret = properties.getProperty('AUTH_SESSION_SECRET');
+  if (!sessionSecret) throw new Error('ระบบล็อกอินยังไม่ได้ตั้งค่า');
+
+  const expectedSignature = signSessionPayload_(parts[0], sessionSecret);
+  if (!constantTimeEquals_(parts[1], expectedSignature)) {
+    throw new Error('Session ไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่');
+  }
+
+  let payload;
+  try {
+    const decodedBytes = Utilities.base64DecodeWebSafe(parts[0]);
+    payload = JSON.parse(Utilities.newBlob(decodedBytes).getDataAsString('UTF-8'));
+  } catch (error) {
+    throw new Error('Session ไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่');
+  }
+
+  const configuredUsername = String(properties.getProperty('ADMIN_USERNAME') || '').trim();
+  const revokedBefore = Number(properties.getProperty('AUTH_REVOKED_BEFORE') || 0);
+  if (
+    payload.v !== ADMIN_SESSION_VERSION ||
+    payload.role !== 'ADMIN' ||
+    payload.sub !== configuredUsername ||
+    !Number.isFinite(payload.iat) ||
+    !Number.isFinite(payload.exp) ||
+    payload.exp <= Date.now() ||
+    payload.iat < revokedBefore
+  ) {
+    throw new Error('Session หมดอายุหรือถูกยกเลิก กรุณาเข้าสู่ระบบใหม่');
+  }
+  return payload;
+}
+
+function createSignedSessionToken_(payload, secret) {
+  const encodedPayload = Utilities.base64EncodeWebSafe(
+    JSON.stringify(payload),
+    Utilities.Charset.UTF_8
+  ).replace(/=+$/g, '');
+  return encodedPayload + '.' + signSessionPayload_(encodedPayload, secret);
+}
+
+function signSessionPayload_(encodedPayload, secret) {
+  const signatureBytes = Utilities.computeHmacSha256Signature(encodedPayload, secret);
+  return Utilities.base64EncodeWebSafe(signatureBytes).replace(/=+$/g, '');
+}
+
+function hashPassword_(password, salt) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    salt + ':' + password,
+    Utilities.Charset.UTF_8
+  );
+  return digest.map(function (byte) {
+    const unsignedByte = byte < 0 ? byte + 256 : byte;
+    return unsignedByte.toString(16).padStart(2, '0');
+  }).join('');
+}
+
+function constantTimeEquals_(left, right) {
+  const leftValue = String(left || '');
+  const rightValue = String(right || '');
+  let difference = leftValue.length ^ rightValue.length;
+  const maxLength = Math.max(leftValue.length, rightValue.length);
+  for (let i = 0; i < maxLength; i++) {
+    difference |= (leftValue.charCodeAt(i) || 0) ^ (rightValue.charCodeAt(i) || 0);
+  }
+  return difference === 0;
+}
+
+function getLoginAttemptKey_(username) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(username || 'UNKNOWN').toLowerCase(),
+    Utilities.Charset.UTF_8
+  );
+  return 'ADMIN_LOGIN_' + Utilities.base64EncodeWebSafe(digest).slice(0, 32);
+}
+
+function getAdminSessionTtlMinutes_() {
+  const configured = Number(PropertiesService.getScriptProperties().getProperty('AUTH_SESSION_TTL_MINUTES') || 60);
+  if (!isFinite(configured)) return 60;
+  return Math.min(Math.max(Math.floor(configured), 5), 480);
+}
+
 // --- ส่วนจัดการใบหน้า (Users) ---
-function registerUser(name, faceDescriptor) {
+function registerUser(name, faceDescriptor, sessionToken) {
+  const adminSession = requireAdminSession_(sessionToken);
   const normalizedName = String(name || '').trim();
   if (!normalizedName) throw new Error('กรุณาระบุชื่อพนักงาน');
   if (!Array.isArray(faceDescriptor) || faceDescriptor.length === 0) {
@@ -95,7 +303,8 @@ function registerUser(name, faceDescriptor) {
   sheet.appendRow([normalizedName, JSON.stringify(faceDescriptor), new Date()]);
   appendAuditLog_('USER_REGISTERED', normalizedName, 'SUCCESS', {
     source: 'FACE_REGISTRATION_WEB',
-    verificationStatus: 'PENDING_ADMIN_REVIEW'
+    verificationStatus: 'ADMIN_AUTHORIZED',
+    adminUsername: adminSession.sub
   });
   return { success: true, message: 'บันทึกข้อมูลหน้าเรียบร้อย' };
 }
@@ -331,7 +540,8 @@ function haversineKm_(lat1, lon1, lat2, lon2) {
 }
 
 // --- LINE Messaging API ---
-function getLineBotStatus() {
+function getLineBotStatus(sessionToken) {
+  requireAdminSession_(sessionToken);
   const properties = PropertiesService.getScriptProperties();
   return {
     success: true,
@@ -411,7 +621,8 @@ function recordLineResult_(record, status, detail) {
 }
 
 // --- ส่วนจัดการ Config (GPS) ---
-function saveConfig(lat, lng, radius) {
+function saveConfig(lat, lng, radius, sessionToken) {
+  const adminSession = requireAdminSession_(sessionToken);
   const numericLat = toFiniteNumber_(lat);
   const numericLng = toFiniteNumber_(lng);
   const numericRadius = toFiniteNumber_(radius);
@@ -436,7 +647,8 @@ function saveConfig(lat, lng, radius) {
   appendAuditLog_('GPS_CONFIG_UPDATED', 'Config', 'SUCCESS', {
     lat: numericLat,
     lng: numericLng,
-    radiusKm: numericRadius
+    radiusKm: numericRadius,
+    adminUsername: adminSession.sub
   });
   return { success: true, message: 'บันทึกการตั้งค่าลง Google Sheets เรียบร้อย' };
 }

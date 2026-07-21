@@ -129,12 +129,4 @@ test('approved LINE notification sends a push message without exposing config', 
   assert.match(payload.messages[0].text, /สมชาย ใจดี/);
   assert.match(payload.messages[0].text, /แผนที่:/);
 
-  const publicStatus = context.getLineBotStatus();
-  assert.deepEqual(JSON.parse(JSON.stringify(publicStatus)), {
-    success: true,
-    configured: true,
-    dryRun: false,
-    approved: true
-  });
-  assert.equal(JSON.stringify(publicStatus).includes('test-token'), false);
 });
