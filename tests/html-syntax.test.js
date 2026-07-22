@@ -56,6 +56,18 @@ test('admin can control and share the employee registration window', () => {
   assert.match(html, /ลบสมาชิก/);
 });
 
+test('admin dashboard supports attendance periods and verified summaries', () => {
+  const html = fs.readFileSync(path.join(projectRoot, 'config.html'), 'utf8');
+  assert.match(html, /action:\s*'getAttendanceDashboard'/);
+  assert.match(html, /data-period="day"/);
+  assert.match(html, /data-period="week"/);
+  assert.match(html, /data-period="month"/);
+  assert.match(html, /มาสายหลัง 08:30/);
+  assert.match(html, /ออกก่อน 17:00/);
+  assert.match(html, /วันหยุด \(ไม่มีข้อมูล\)/);
+  assert.match(html, /ใช้เฉพาะรายการสแกนใบหน้าที่ระบบยืนยันแล้ว/);
+});
+
 test('registration page is no-login and checks the public registration window', () => {
   const html = fs.readFileSync(path.join(projectRoot, 'register.html'), 'utf8');
   assert.match(html, /actionUrl\(API_URL,\s*'getRegistrationStatus'\)/);

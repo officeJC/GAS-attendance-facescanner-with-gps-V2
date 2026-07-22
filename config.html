@@ -36,10 +36,11 @@
 
     .container {
       width: 100%;
-      max-width: 500px;
+      max-width: 1040px;
       position: relative; z-index: 1;
       animation: fadeIn 0.5s ease;
     }
+    #loginView { max-width: 500px; }
 
     /* Header */
     .page-header { margin-bottom: 24px; }
@@ -176,6 +177,71 @@
       font-family: 'Sarabun', sans-serif; white-space: nowrap;
     }
 
+    .dashboard-toolbar { display: grid; gap: 12px; margin-bottom: 16px; }
+    .period-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .period-tab {
+      border: 1px solid rgba(99,102,241,0.28); background: rgba(99,102,241,0.08);
+      color: #94a3b8; border-radius: 10px; padding: 9px 8px; cursor: pointer;
+      font-family: 'Sarabun', sans-serif; font-weight: 600;
+    }
+    .period-tab.active { background: #4f46e5; border-color: #6366f1; color: white; }
+    .dashboard-navigation { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; }
+    .dashboard-navigation input { margin: 0; min-width: 0; }
+    .btn-dashboard-nav {
+      border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06);
+      color: #cbd5e1; border-radius: 10px; padding: 8px 12px; cursor: pointer;
+      font-family: 'Sarabun', sans-serif; font-weight: 600;
+    }
+    .dashboard-period-label { color: #c7d2fe; font-weight: 600; margin-bottom: 14px; }
+    .dashboard-summary {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 10px;
+      margin-bottom: 18px;
+    }
+    .summary-tile {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; padding: 12px; min-width: 0;
+    }
+    .summary-label { color: #64748b; font-size: 0.75em; line-height: 1.35; }
+    .summary-value { color: #e2e8f0; font-size: 1.18em; font-weight: 700; margin-top: 4px; }
+    .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .incident-panel {
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; padding: 13px;
+    }
+    .incident-title { font-weight: 600; color: #cbd5e1; margin-bottom: 9px; }
+    .incident-list { display: grid; gap: 7px; }
+    .incident-item { display: flex; justify-content: space-between; gap: 10px; color: #cbd5e1; }
+    .incident-count { color: #fbbf24; font-weight: 700; white-space: nowrap; }
+    .dashboard-table-wrap {
+      overflow-x: auto; border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; margin-bottom: 16px;
+    }
+    .dashboard-table { width: 100%; border-collapse: collapse; min-width: 720px; }
+    .dashboard-table th, .dashboard-table td {
+      padding: 10px 11px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 0.8em; vertical-align: top;
+    }
+    .dashboard-table th { color: #94a3b8; background: rgba(15,23,42,0.6); white-space: nowrap; }
+    .dashboard-table td { color: #cbd5e1; }
+    .dashboard-table tr:last-child td { border-bottom: none; }
+    .status-pill {
+      display: inline-block; border-radius: 999px; padding: 3px 8px;
+      font-size: 0.82em; font-weight: 600; white-space: nowrap;
+    }
+    .status-present { color: #6ee7b7; background: rgba(16,185,129,0.12); }
+    .status-incomplete { color: #fcd34d; background: rgba(245,158,11,0.12); }
+    .status-day-off { color: #93c5fd; background: rgba(59,130,246,0.12); }
+    .dashboard-section-title { color: #c7d2fe; font-weight: 600; margin: 16px 0 9px; }
+    .dashboard-meta { color: #64748b; font-size: 0.76em; line-height: 1.5; white-space: pre-line; }
+    .dashboard-loading { color: #94a3b8; text-align: center; padding: 18px 0; }
+
+    @media (max-width: 760px) {
+      .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .dashboard-navigation { grid-template-columns: auto 1fr auto; }
+      .dashboard-navigation .btn-dashboard-refresh { grid-column: 1 / -1; }
+    }
+
     .btn-back {
       display: flex; align-items: center; justify-content: center; gap: 8px;
       padding: 13px; width: 100%; border-radius: 12px;
@@ -255,12 +321,38 @@
   <div class="page-header">
     <a href="index.html" class="back-btn">← กลับ</a>
     <h2>⚙️ ตั้งค่าระบบ</h2>
-    <p class="page-subtitle">จัดการ API จุดลงเวลา GPS และตรวจสถานะ LINE Bot</p>
+    <p class="page-subtitle">Dashboard การทำงาน จัดการสมาชิก GPS และสถานะ LINE Bot</p>
   </div>
 
   <div class="user-bar">
     <span>👤 ผู้ดูแล: <strong id="loggedInUsername">-</strong></span>
     <button type="button" class="btn-logout" onclick="logoutAdmin()">ออกจากระบบ</button>
+  </div>
+
+  <!-- Attendance Dashboard -->
+  <div class="card">
+    <div class="section-header">
+      <div class="section-icon indigo">📊</div>
+      <span class="section-title-text">Dashboard การเข้า / ออกงาน</span>
+    </div>
+
+    <div class="dashboard-toolbar">
+      <div class="period-tabs">
+        <button class="period-tab active" type="button" data-period="day" onclick="setDashboardPeriod('day')">รายวัน</button>
+        <button class="period-tab" type="button" data-period="week" onclick="setDashboardPeriod('week')">รายสัปดาห์</button>
+        <button class="period-tab" type="button" data-period="month" onclick="setDashboardPeriod('month')">รายเดือน</button>
+      </div>
+      <div class="dashboard-navigation">
+        <button class="btn-dashboard-nav" type="button" onclick="shiftDashboardPeriod(-1)" aria-label="ช่วงก่อนหน้า">‹</button>
+        <input type="date" id="dashboardDate" onchange="loadDashboard()">
+        <button class="btn-dashboard-nav" type="button" onclick="shiftDashboardPeriod(1)" aria-label="ช่วงถัดไป">›</button>
+        <button class="btn-dashboard-nav btn-dashboard-refresh" type="button" onclick="loadDashboard()">รีเฟรช</button>
+      </div>
+    </div>
+
+    <div id="dashboardPeriodLabel" class="dashboard-period-label">กำลังโหลดช่วงข้อมูล...</div>
+    <div id="dashboardContent" class="dashboard-loading">กำลังโหลด Dashboard...</div>
+    <div id="dashboardMetadata" class="dashboard-meta"></div>
   </div>
 
   <!-- API URL Card -->
@@ -365,11 +457,15 @@
   const msgDiv = document.getElementById('msg');
   let adminSessionToken = sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
   let activeApiUrl = '';
+  let dashboardPeriod = 'day';
 
   document.getElementById('loginForm').addEventListener('submit', loginAdmin);
 
   window.onload = async function() {
     const savedUrl = AttendanceApi.getApiUrl(GAS_API_URL);
+    const todayKey = getBangkokDateKey(new Date());
+    document.getElementById('dashboardDate').value = todayKey;
+    document.getElementById('dashboardDate').max = todayKey;
     document.getElementById('loginApiUrl').value = savedUrl;
     document.getElementById('apiUrl').value = savedUrl;
 
@@ -433,6 +529,7 @@
     loadLineBotStatus(apiUrl);
     loadRegistrationStatus(apiUrl);
     loadUsers();
+    loadDashboard();
   }
 
   function logoutAdmin() {
@@ -448,6 +545,275 @@
       method: 'POST',
       body: JSON.stringify(payload)
     }, { retries: 0, timeoutMs: 25000 });
+  }
+
+  function getBangkokDateKey(date) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date);
+    const values = {};
+    parts.forEach(part => { values[part.type] = part.value; });
+    return values.year + '-' + values.month + '-' + values.day;
+  }
+
+  function formatDashboardDateKey(date) {
+    return date.getUTCFullYear() + '-' +
+      String(date.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(date.getUTCDate()).padStart(2, '0');
+  }
+
+  function setDashboardPeriod(period) {
+    if (!['day', 'week', 'month'].includes(period)) return;
+    dashboardPeriod = period;
+    document.querySelectorAll('.period-tab').forEach(button => {
+      button.classList.toggle('active', button.dataset.period === period);
+    });
+    loadDashboard();
+  }
+
+  function shiftDashboardPeriod(direction) {
+    const dateInput = document.getElementById('dashboardDate');
+    const dateParts = String(dateInput.value || '').split('-').map(Number);
+    if (dateParts.length !== 3 || dateParts.some(value => !Number.isFinite(value))) return;
+    let reference = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]));
+    if (dashboardPeriod === 'month') {
+      reference = new Date(Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth() + direction, 1));
+    } else {
+      const dayStep = dashboardPeriod === 'week' ? 7 : 1;
+      reference = new Date(reference.getTime() + direction * dayStep * 86400000);
+    }
+    const nextDate = formatDashboardDateKey(reference);
+    dateInput.value = nextDate > dateInput.max ? dateInput.max : nextDate;
+    loadDashboard();
+  }
+
+  async function loadDashboard() {
+    const content = document.getElementById('dashboardContent');
+    const metadata = document.getElementById('dashboardMetadata');
+    const referenceDate = document.getElementById('dashboardDate').value;
+    if (!activeApiUrl || !adminSessionToken || !referenceDate) return;
+    content.className = 'dashboard-loading';
+    content.textContent = 'กำลังโหลด Dashboard...';
+    metadata.textContent = '';
+    try {
+      const result = await postApi(activeApiUrl, {
+        action: 'getAttendanceDashboard',
+        period: dashboardPeriod,
+        referenceDate: referenceDate,
+        sessionToken: adminSessionToken
+      });
+      if (!result.success) throw new Error(result.error || 'โหลด Dashboard ไม่สำเร็จ');
+      renderDashboard(result);
+    } catch (error) {
+      content.className = 'dashboard-loading msg-error';
+      content.textContent = '❌ โหลด Dashboard ไม่ได้: ' + error.message;
+    }
+  }
+
+  function renderDashboard(data) {
+    const content = document.getElementById('dashboardContent');
+    const range = data.range || {};
+    const summary = data.summary || {};
+    content.className = '';
+    content.innerHTML = '';
+    document.getElementById('dashboardPeriodLabel').textContent = range.startDate === range.endDate
+      ? (range.startDisplay || range.startDate || '-')
+      : (range.startDisplay || range.startDate || '-') + ' – ' + (range.endDisplay || range.endDate || '-');
+
+    const summaryGrid = document.createElement('div');
+    summaryGrid.className = 'dashboard-summary';
+    [
+      ['พนักงาน', String(summary.employeeCount || 0) + ' คน'],
+      ['วันที่มีข้อมูล', String(summary.workDays || 0) + ' คน-วัน'],
+      ['เวลาทำงานรวม', summary.totalWorkedLabel || '0.00 ชม.'],
+      ['เทียบมาตรฐาน 9 ชม.', summary.varianceLabel || '0.00 ชม.'],
+      ['มาสาย', String(summary.lateCount || 0) + ' ครั้ง'],
+      ['ออกก่อนเวลา', String(summary.earlyLeaveCount || 0) + ' ครั้ง'],
+      ['วันหยุด (ไม่มีข้อมูล)', String(summary.dayOffDays || 0) + ' คน-วัน']
+    ].forEach(item => summaryGrid.appendChild(createSummaryTile(item[0], item[1])));
+    content.appendChild(summaryGrid);
+
+    const incidentGrid = document.createElement('div');
+    incidentGrid.className = 'dashboard-grid';
+    incidentGrid.appendChild(createIncidentPanel('⏰ มาสายหลัง 08:30 น.', data.lateEmployees || []));
+    incidentGrid.appendChild(createIncidentPanel('🏃 ออกก่อน 17:00 น.', data.earlyLeaveEmployees || []));
+    content.appendChild(incidentGrid);
+
+    appendDashboardTitle(content, 'สรุปรายพนักงาน');
+    const employeeHeaders = ['ชื่อ', 'วันที่มีข้อมูล', 'เวลารวม', 'มาตรฐาน', 'ส่วนต่าง', 'มาสาย', 'ออกก่อน', 'วันหยุด'];
+    const employeeRows = (data.employeeSummary || []).map(item => [
+      item.name,
+      String(item.workDays || 0),
+      item.totalWorkedLabel || '0.00 ชม.',
+      item.baselineLabel || '0.00 ชม.',
+      item.varianceLabel || '0.00 ชม.',
+      String(item.lateCount || 0),
+      String(item.earlyLeaveCount || 0),
+      String(item.dayOffDays || 0)
+    ]);
+    content.appendChild(createDashboardTable(employeeHeaders, employeeRows));
+
+    appendDashboardTitle(content, 'รายละเอียดรายวัน');
+    content.appendChild(createDailyDashboardTable(data.daily || []));
+
+    const policy = data.policy || {};
+    const metadata = data.metadata || {};
+    document.getElementById('dashboardMetadata').textContent =
+      'เกณฑ์: ' + (policy.baselineLabel || '9.00 ชม./วันที่มีข้อมูลลงเวลา') +
+      ' · มาสายหลัง ' + (policy.lateAfter || '08:30') +
+      ' · ออกก่อน ' + (policy.earlyLeaveBefore || '17:00') + '\n' +
+      'แหล่งข้อมูล: ' + (metadata.source || 'Google Sheets: Users + Attendance') +
+      ' · สถานะตรวจสอบ: ใช้เฉพาะรายการสแกนใบหน้าที่ระบบยืนยันแล้ว' +
+      ' · ข้อมูลที่ไม่ผ่านการยืนยันและไม่นำมาคำนวณ ' + (metadata.ignoredUnverifiedRecords || 0) + ' รายการ' +
+      (metadata.generatedAt ? ' · อัปเดต ' + formatBangkokDateTime(metadata.generatedAt) : '');
+  }
+
+  function createSummaryTile(label, value) {
+    const tile = document.createElement('div');
+    tile.className = 'summary-tile';
+    const labelElement = document.createElement('div');
+    labelElement.className = 'summary-label';
+    labelElement.textContent = label;
+    const valueElement = document.createElement('div');
+    valueElement.className = 'summary-value';
+    valueElement.textContent = value;
+    tile.appendChild(labelElement);
+    tile.appendChild(valueElement);
+    return tile;
+  }
+
+  function createIncidentPanel(title, items) {
+    const panel = document.createElement('div');
+    panel.className = 'incident-panel';
+    const heading = document.createElement('div');
+    heading.className = 'incident-title';
+    heading.textContent = title;
+    panel.appendChild(heading);
+    const list = document.createElement('div');
+    list.className = 'incident-list';
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'note';
+      empty.textContent = 'ไม่มีข้อมูลในช่วงนี้';
+      list.appendChild(empty);
+    } else {
+      items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'incident-item';
+        const name = document.createElement('span');
+        name.textContent = item.name;
+        const count = document.createElement('span');
+        count.className = 'incident-count';
+        count.textContent = item.count + ' ครั้ง';
+        row.appendChild(name);
+        row.appendChild(count);
+        list.appendChild(row);
+      });
+    }
+    panel.appendChild(list);
+    return panel;
+  }
+
+  function appendDashboardTitle(container, text) {
+    const title = document.createElement('div');
+    title.className = 'dashboard-section-title';
+    title.textContent = text;
+    container.appendChild(title);
+  }
+
+  function createDashboardTable(headers, rows) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'dashboard-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'dashboard-table';
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    headers.forEach(header => {
+      const cell = document.createElement('th');
+      cell.textContent = header;
+      headRow.appendChild(cell);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = document.createElement('tbody');
+    if (!rows.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = headers.length;
+      cell.textContent = 'ไม่มีข้อมูล';
+      row.appendChild(cell);
+      body.appendChild(row);
+    } else {
+      rows.forEach(values => {
+        const row = document.createElement('tr');
+        values.forEach(value => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+    table.appendChild(body);
+    wrapper.appendChild(table);
+    return wrapper;
+  }
+
+  function createDailyDashboardTable(items) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'dashboard-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'dashboard-table';
+    const headers = ['วันที่', 'ชื่อ', 'เข้า', 'ออก', 'เวลางาน', 'เทียบ 9 ชม.', 'สถานะ'];
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    headers.forEach(header => {
+      const cell = document.createElement('th');
+      cell.textContent = header;
+      headRow.appendChild(cell);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = document.createElement('tbody');
+    if (!items.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = headers.length;
+      cell.textContent = 'ไม่มีพนักงานหรือข้อมูลในช่วงนี้';
+      row.appendChild(cell);
+      body.appendChild(row);
+    } else {
+      items.forEach(item => {
+        const row = document.createElement('tr');
+        [item.dateDisplay || item.date, item.name, item.checkIn || '-', item.checkOut || '-', item.workedLabel || '0.00 ชม.', item.status === 'DAY_OFF' ? '-' : (item.varianceLabel || '0.00 ชม.')]
+          .forEach(value => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+        const statusCell = document.createElement('td');
+        const status = document.createElement('span');
+        status.className = 'status-pill ' + (item.status === 'PRESENT'
+          ? 'status-present'
+          : item.status === 'INCOMPLETE' ? 'status-incomplete' : 'status-day-off');
+        const flags = [];
+        if (item.late) flags.push('มาสาย');
+        if (item.earlyLeave) flags.push('ออกก่อน');
+        if (item.status === 'INCOMPLETE') flags.push('ข้อมูลไม่ครบ');
+        status.textContent = item.status === 'DAY_OFF'
+          ? 'วันหยุด'
+          : item.status === 'INCOMPLETE' ? flags.join(' · ') : (flags.join(' · ') || 'ลงเวลาครบ');
+        statusCell.appendChild(status);
+        row.appendChild(statusCell);
+        body.appendChild(row);
+      });
+    }
+    table.appendChild(body);
+    wrapper.appendChild(table);
+    return wrapper;
   }
 
   function loadGpsConfig(apiUrl) {

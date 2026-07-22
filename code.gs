@@ -12,6 +12,9 @@ const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
 const ADMIN_LOGIN_LOCK_SECONDS = 900;
 const KNOWN_FACES_CACHE_KEY = 'KNOWN_FACES_V2';
 const KNOWN_FACES_CACHE_SECONDS = 300;
+const WORKDAY_BASELINE_MINUTES = 9 * 60;
+const LATE_AFTER_TIME = '08:30:00';
+const EARLY_LEAVE_BEFORE_TIME = '17:00:00';
 const ATTENDANCE_HEADERS = [
   'Request ID',
   'Name',
@@ -62,6 +65,9 @@ function doPost(e) {
     }
     if (action === 'listUsers') {
       return jsonResponse_(listUsers(data.sessionToken));
+    }
+    if (action === 'getAttendanceDashboard') {
+      return jsonResponse_(getAttendanceDashboard(data.period, data.referenceDate, data.sessionToken));
     }
     if (action === 'deleteUser') {
       return jsonResponse_(deleteUser(data.name, data.sessionToken));
@@ -454,6 +460,332 @@ function listUsers(sessionToken) {
     success: true,
     users: Object.keys(usersByName).sort().map(function (name) { return usersByName[name]; })
   };
+}
+
+function getAttendanceDashboard(period, referenceDate, sessionToken) {
+  requireAdminSession_(sessionToken);
+  const normalizedPeriod = String(period || 'day').trim().toLowerCase();
+  const normalizedReferenceDate = String(referenceDate || '').trim();
+  const requestedRange = resolveDashboardRange_(normalizedPeriod, normalizedReferenceDate);
+  const todayKey = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'yyyy-MM-dd');
+  if (requestedRange.startDate > todayKey) throw new Error('ไม่สามารถดูข้อมูลช่วงอนาคตได้');
+
+  const range = {
+    startDate: requestedRange.startDate,
+    endDate: requestedRange.endDate > todayKey ? todayKey : requestedRange.endDate
+  };
+  const employees = getActiveDashboardEmployees_();
+  const employeeByName = {};
+  const dailyByKey = {};
+  const daily = [];
+
+  employees.forEach(function (employee) {
+    employeeByName[employee.name] = employee;
+    listDateKeys_(range.startDate, range.endDate).forEach(function (dateKey) {
+      if (employee.registeredDate && dateKey < employee.registeredDate) return;
+      const item = {
+        date: dateKey,
+        dateDisplay: formatThaiDateKey_(dateKey),
+        name: employee.name,
+        status: 'DAY_OFF',
+        checkIn: null,
+        checkOut: null,
+        workedMinutes: 0,
+        workedLabel: formatWorkDuration_(0),
+        baselineMinutes: WORKDAY_BASELINE_MINUTES,
+        varianceMinutes: 0,
+        varianceLabel: formatMinuteVariance_(0),
+        late: false,
+        earlyLeave: false,
+        recordCount: 0,
+        verificationStatus: 'NO_ATTENDANCE_RECORD_FOUND',
+        events: []
+      };
+      dailyByKey[employee.name + '\u0001' + dateKey] = item;
+      daily.push(item);
+    });
+  });
+
+  let ignoredUnverifiedRecords = 0;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const attendanceSheet = ss.getSheetByName('Attendance');
+  if (attendanceSheet && attendanceSheet.getLastRow() > 1) {
+    const rows = attendanceSheet.getDataRange().getValues();
+    for (let i = 1; i < rows.length; i++) {
+      const name = String(rows[i][1] || '').trim();
+      const type = String(rows[i][2] || '').trim().toUpperCase();
+      const timestamp = new Date(rows[i][5]);
+      if (!employeeByName[name] || (type !== 'IN' && type !== 'OUT') || !Number.isFinite(timestamp.getTime())) {
+        continue;
+      }
+
+      const dateKey = Utilities.formatDate(timestamp, APP_TIME_ZONE, 'yyyy-MM-dd');
+      if (dateKey < range.startDate || dateKey > range.endDate) continue;
+      const target = dailyByKey[name + '\u0001' + dateKey];
+      if (!target) continue;
+
+      const source = String(rows[i][9] || '').trim();
+      const verificationStatus = String(rows[i][10] || '').trim();
+      if (source !== 'FACE_SCAN_WEB' || !isDashboardVerifiedRecord_(verificationStatus)) {
+        ignoredUnverifiedRecords++;
+        continue;
+      }
+      target.events.push({
+        type: type,
+        timestampMs: timestamp.getTime(),
+        time: Utilities.formatDate(timestamp, APP_TIME_ZONE, 'HH:mm:ss')
+      });
+    }
+  }
+
+  daily.forEach(function (item) {
+    summarizeDashboardDay_(item);
+    delete item.events;
+  });
+  daily.sort(function (left, right) {
+    if (left.date !== right.date) return left.date > right.date ? -1 : 1;
+    if (left.name === right.name) return 0;
+    return left.name < right.name ? -1 : 1;
+  });
+
+  const employeeSummaryByName = {};
+  employees.forEach(function (employee) {
+    employeeSummaryByName[employee.name] = {
+      name: employee.name,
+      workDays: 0,
+      dayOffDays: 0,
+      incompleteDays: 0,
+      lateCount: 0,
+      earlyLeaveCount: 0,
+      totalWorkedMinutes: 0,
+      totalWorkedLabel: formatWorkDuration_(0),
+      baselineMinutes: 0,
+      baselineLabel: formatWorkDuration_(0),
+      varianceMinutes: 0,
+      varianceLabel: formatMinuteVariance_(0)
+    };
+  });
+
+  const summary = {
+    employeeCount: employees.length,
+    employeeDays: daily.length,
+    workDays: 0,
+    dayOffDays: 0,
+    incompleteDays: 0,
+    lateCount: 0,
+    earlyLeaveCount: 0,
+    totalWorkedMinutes: 0,
+    totalWorkedLabel: formatWorkDuration_(0),
+    baselineMinutes: 0,
+    baselineLabel: formatWorkDuration_(0),
+    varianceMinutes: 0,
+    varianceLabel: formatMinuteVariance_(0)
+  };
+
+  daily.forEach(function (item) {
+    const employeeSummary = employeeSummaryByName[item.name];
+    if (item.status === 'DAY_OFF') {
+      summary.dayOffDays++;
+      employeeSummary.dayOffDays++;
+      return;
+    }
+
+    summary.workDays++;
+    summary.totalWorkedMinutes += item.workedMinutes;
+    summary.baselineMinutes += WORKDAY_BASELINE_MINUTES;
+    employeeSummary.workDays++;
+    employeeSummary.totalWorkedMinutes += item.workedMinutes;
+    employeeSummary.baselineMinutes += WORKDAY_BASELINE_MINUTES;
+    if (item.status === 'INCOMPLETE') {
+      summary.incompleteDays++;
+      employeeSummary.incompleteDays++;
+    }
+    if (item.late) {
+      summary.lateCount++;
+      employeeSummary.lateCount++;
+    }
+    if (item.earlyLeave) {
+      summary.earlyLeaveCount++;
+      employeeSummary.earlyLeaveCount++;
+    }
+  });
+
+  const employeeSummary = Object.keys(employeeSummaryByName).sort().map(function (name) {
+    const item = employeeSummaryByName[name];
+    item.totalWorkedLabel = formatWorkDuration_(item.totalWorkedMinutes);
+    item.baselineLabel = formatWorkDuration_(item.baselineMinutes);
+    item.varianceMinutes = item.totalWorkedMinutes - item.baselineMinutes;
+    item.varianceLabel = formatMinuteVariance_(item.varianceMinutes);
+    return item;
+  });
+  summary.totalWorkedLabel = formatWorkDuration_(summary.totalWorkedMinutes);
+  summary.baselineLabel = formatWorkDuration_(summary.baselineMinutes);
+  summary.varianceMinutes = summary.totalWorkedMinutes - summary.baselineMinutes;
+  summary.varianceLabel = formatMinuteVariance_(summary.varianceMinutes);
+
+  return {
+    success: true,
+    period: normalizedPeriod,
+    range: {
+      startDate: range.startDate,
+      endDate: range.endDate,
+      startDisplay: formatThaiDateKey_(range.startDate),
+      endDisplay: formatThaiDateKey_(range.endDate)
+    },
+    policy: {
+      baselineMinutesPerWorkDay: WORKDAY_BASELINE_MINUTES,
+      baselineLabel: '9.00 ชม./วันที่มีข้อมูลลงเวลา',
+      lateAfter: LATE_AFTER_TIME.slice(0, 5),
+      earlyLeaveBefore: EARLY_LEAVE_BEFORE_TIME.slice(0, 5),
+      noDataStatus: 'DAY_OFF'
+    },
+    summary: summary,
+    lateEmployees: buildDashboardIncidentSummary_(employeeSummary, 'lateCount'),
+    earlyLeaveEmployees: buildDashboardIncidentSummary_(employeeSummary, 'earlyLeaveCount'),
+    employeeSummary: employeeSummary,
+    daily: daily,
+    metadata: {
+      source: 'Google Sheets: Users + Attendance',
+      verificationStatus: 'VERIFIED_FACE_SCAN_RECORDS_ONLY',
+      ignoredUnverifiedRecords: ignoredUnverifiedRecords,
+      generatedAt: new Date().toISOString()
+    }
+  };
+}
+
+function getActiveDashboardEmployees_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Users');
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  const data = sheet.getDataRange().getValues();
+  const startIndex = isUsersHeaderRow_(data[0]) ? 1 : 0;
+  const employeesByName = {};
+  for (let i = startIndex; i < data.length; i++) {
+    const name = String(data[i][0] || '').trim();
+    if (!name || !isUserActive_(data[i])) continue;
+    const registeredAt = new Date(data[i][2]);
+    const registeredDate = Number.isFinite(registeredAt.getTime())
+      ? Utilities.formatDate(registeredAt, APP_TIME_ZONE, 'yyyy-MM-dd')
+      : null;
+    if (!employeesByName[name]) {
+      employeesByName[name] = { name: name, registeredDate: registeredDate };
+    } else if (registeredDate && (!employeesByName[name].registeredDate || registeredDate < employeesByName[name].registeredDate)) {
+      employeesByName[name].registeredDate = registeredDate;
+    }
+  }
+  return Object.keys(employeesByName).sort().map(function (name) { return employeesByName[name]; });
+}
+
+function resolveDashboardRange_(period, referenceDate) {
+  if (period !== 'day' && period !== 'week' && period !== 'month') {
+    throw new Error('ช่วง Dashboard ต้องเป็น day, week หรือ month');
+  }
+  const reference = parseDateKey_(referenceDate);
+  if (period === 'day') {
+    const dateKey = formatUtcDateKey_(reference);
+    return { startDate: dateKey, endDate: dateKey };
+  }
+  if (period === 'week') {
+    const mondayOffset = (reference.getUTCDay() + 6) % 7;
+    return {
+      startDate: formatUtcDateKey_(addUtcDays_(reference, -mondayOffset)),
+      endDate: formatUtcDateKey_(addUtcDays_(reference, 6 - mondayOffset))
+    };
+  }
+  return {
+    startDate: formatUtcDateKey_(new Date(Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth(), 1))),
+    endDate: formatUtcDateKey_(new Date(Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth() + 1, 0)))
+  };
+}
+
+function parseDateKey_(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  if (!match) throw new Error('วันที่อ้างอิงไม่ถูกต้อง');
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (date.getUTCFullYear() !== Number(match[1]) ||
+      date.getUTCMonth() !== Number(match[2]) - 1 ||
+      date.getUTCDate() !== Number(match[3])) {
+    throw new Error('วันที่อ้างอิงไม่ถูกต้อง');
+  }
+  return date;
+}
+
+function formatUtcDateKey_(date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
+}
+
+function addUtcDays_(date, dayCount) {
+  return new Date(date.getTime() + dayCount * 86400000);
+}
+
+function listDateKeys_(startDate, endDate) {
+  const dates = [];
+  let current = parseDateKey_(startDate);
+  const end = parseDateKey_(endDate);
+  while (current.getTime() <= end.getTime()) {
+    dates.push(formatUtcDateKey_(current));
+    current = addUtcDays_(current, 1);
+  }
+  return dates;
+}
+
+function formatThaiDateKey_(dateKey) {
+  return formatThaiDate_(parseDateKey_(dateKey));
+}
+
+function isDashboardVerifiedRecord_(status) {
+  return status === 'CLIENT_FACE_MATCH_AND_SERVER_GPS_VALIDATED' ||
+    status === 'CLIENT_FACE_MATCH_GPS_DISABLED';
+}
+
+function summarizeDashboardDay_(item) {
+  if (item.events.length === 0) return;
+  item.events.sort(function (left, right) { return left.timestampMs - right.timestampMs; });
+  const checkIns = item.events.filter(function (event) { return event.type === 'IN'; });
+  const checkOuts = item.events.filter(function (event) { return event.type === 'OUT'; });
+  item.checkIn = checkIns.length ? checkIns[0].time : null;
+  item.checkOut = checkOuts.length ? checkOuts[checkOuts.length - 1].time : null;
+  item.recordCount = item.events.length;
+  item.status = item.checkIn && item.checkOut ? 'PRESENT' : 'INCOMPLETE';
+  item.late = Boolean(item.checkIn && item.checkIn > LATE_AFTER_TIME);
+  item.earlyLeave = Boolean(item.checkOut && item.checkOut < EARLY_LEAVE_BEFORE_TIME);
+  item.verificationStatus = 'SERVER_CONFIRMED_FROM_VERIFIED_FACE_SCAN';
+
+  let openCheckIn = null;
+  let workedMinutes = 0;
+  item.events.forEach(function (event) {
+    if (event.type === 'IN' && openCheckIn === null) {
+      openCheckIn = event.timestampMs;
+    } else if (event.type === 'OUT' && openCheckIn !== null && event.timestampMs > openCheckIn) {
+      workedMinutes += Math.floor((event.timestampMs - openCheckIn) / 60000);
+      openCheckIn = null;
+    }
+  });
+  item.workedMinutes = workedMinutes;
+  item.workedLabel = formatWorkDuration_(workedMinutes);
+  item.varianceMinutes = workedMinutes - WORKDAY_BASELINE_MINUTES;
+  item.varianceLabel = formatMinuteVariance_(item.varianceMinutes);
+}
+
+function formatMinuteVariance_(minutes) {
+  const numericMinutes = Math.trunc(Number(minutes) || 0);
+  if (numericMinutes === 0) return '0.00 ชม.';
+  return (numericMinutes > 0 ? '+' : '-') + formatWorkDuration_(Math.abs(numericMinutes));
+}
+
+function buildDashboardIncidentSummary_(employeeSummary, propertyName) {
+  return employeeSummary
+    .filter(function (item) { return item[propertyName] > 0; })
+    .map(function (item) { return { name: item.name, count: item[propertyName] }; })
+    .sort(function (left, right) {
+      if (left.count !== right.count) return right.count - left.count;
+      if (left.name === right.name) return 0;
+      return left.name < right.name ? -1 : 1;
+    });
 }
 
 function deleteUser(name, sessionToken) {
