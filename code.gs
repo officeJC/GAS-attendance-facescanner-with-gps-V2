@@ -585,6 +585,14 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
       };
     }
 
+    if (record.attendanceType === 'IN' && hasOpenCheckIn_(sheet, record.name)) {
+      appendAuditLog_('ATTENDANCE_REJECTED', record.name, 'DUPLICATE_CHECK_IN', {
+        requestId: record.requestId,
+        attendanceType: record.attendanceType
+      });
+      throw new Error('คุณสแกนเข้างานแล้ว กรุณาสแกนออกงานก่อนสแกนเข้างานครั้งใหม่');
+    }
+
     if (record.attendanceType === 'OUT') {
       const openCheckIn = findOpenCheckIn_(sheet, record.name, record.date, now);
       if (openCheckIn) {
@@ -696,6 +704,20 @@ function findAttendanceByRequestId_(sheet, requestId) {
     }
   }
   return null;
+}
+
+function hasOpenCheckIn_(sheet, employeeName) {
+  if (sheet.getLastRow() <= 1) return false;
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (String(values[i][1]).trim() !== employeeName) continue;
+
+    const attendanceType = String(values[i][2]).trim().toUpperCase();
+    if (attendanceType === 'OUT') return false;
+    if (attendanceType === 'IN') return true;
+  }
+  return false;
 }
 
 function findOpenCheckIn_(sheet, employeeName, attendanceDate, checkOutTime) {

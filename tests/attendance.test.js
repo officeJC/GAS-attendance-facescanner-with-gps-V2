@@ -198,6 +198,33 @@ test('logAttendance writes verified IN record and records DRY_RUN LINE status', 
   assert.equal(attendanceRows[1][12], '');
 });
 
+test('logAttendance rejects a second check-in until the employee checks out', () => {
+  const { context, sheets } = createAttendanceContext();
+
+  context.logAttendance(
+    'สมชาย ใจดี',
+    13.7563,
+    100.5018,
+    'IN',
+    0.2,
+    '123e4567-e89b-12d3-a456-426614174020'
+  );
+
+  assert.throws(
+    () => context.logAttendance(
+      'สมชาย ใจดี',
+      13.7563,
+      100.5018,
+      'IN',
+      0.2,
+      '123e4567-e89b-12d3-a456-426614174021'
+    ),
+    /สแกนออกงานก่อนสแกนเข้างานครั้งใหม่/
+  );
+  assert.equal(sheets.get('Attendance').rows.length, 2);
+  assert.equal(sheets.get('AuditLog').rows.at(-1)[4], 'DUPLICATE_CHECK_IN');
+});
+
 test('check-out calculates work duration from the latest open check-in', () => {
   const { context, sheets } = createAttendanceContext();
   assert.equal(context.formatThaiDate_(new Date()), '21 ก.ค. 2569');
