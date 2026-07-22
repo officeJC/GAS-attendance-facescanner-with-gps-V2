@@ -4,8 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ลงทะเบียนใบหน้า</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
   <script src="js/api-config.js"></script>
+  <script src="js/api-client.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -238,12 +240,16 @@
 </div>
 
 <script>
-  const API_URL   = localStorage.getItem('gasApiUrl') || GAS_API_URL;
+  const API_URL   = AttendanceApi.getApiUrl(GAS_API_URL);
   const video     = document.getElementById('video');
   const statusDiv = document.getElementById('status');
   const btnSave   = document.getElementById('btnSave');
   const msgDiv    = document.getElementById('msg');
-  const countSpan = document.getElementById('saveCount');
+  const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+  const FACE_DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({
+    inputSize: 320,
+    scoreThreshold: 0.5
+  });
   let saveCounter = 0;
 
   if (!API_URL) {
@@ -254,8 +260,11 @@
 
   async function initRegistrationPage() {
     try {
-      const response = await fetch(API_URL + '?action=getRegistrationStatus');
-      const status = await response.json();
+      const status = await AttendanceApi.requestJson(
+        AttendanceApi.actionUrl(API_URL, 'getRegistrationStatus'),
+        {},
+        { retries: 2 }
+      );
       if (!status.success) throw new Error(status.error || 'ตรวจสอบสถานะไม่สำเร็จ');
       if (!status.enabled) {
         statusDiv.innerHTML = '<span style="color:#fbbf24">🔒 ขณะนี้ปิดรับลงทะเบียน กรุณาติดต่อผู้ดูแลระบบ</span>';
@@ -287,9 +296,8 @@
 
   async function initModels() {
     try {
-      const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
       await Promise.all([
-        faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
         faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
         faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
       ]);
@@ -300,7 +308,13 @@
   }
 
   function startCamera() {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
+    navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      }
+    })
       .then(stream => {
         video.srcObject = stream;
         statusDiv.innerText = '';
@@ -320,7 +334,7 @@
     msgDiv.innerText = '';
 
     const detection = await faceapi
-      .detectSingleFace(video)
+      .detectSingleFace(video, FACE_DETECTOR_OPTIONS)
       .withFaceLandmarks()
       .withFaceDescriptor();
 
@@ -334,19 +348,17 @@
     const descriptorArray = Array.from(detection.descriptor);
 
     try {
-      const res = await fetch(API_URL, {
+      const data = await AttendanceApi.requestJson(API_URL, {
         method: 'POST',
         body: JSON.stringify({
           action: 'registerUser',
           name,
           faceDescriptor: descriptorArray
         })
-      });
-      const data = await res.json();
+      }, { retries: 0, timeoutMs: 25000 });
       if (!data.success) throw new Error(data.error || 'ลงทะเบียนใบหน้าไม่สำเร็จ');
 
       saveCounter++;
-      countSpan.innerText = saveCounter;
       updateDots();
       msgDiv.innerHTML = '<span class="msg-success">✅ บันทึกครั้งที่ ' + saveCounter + ' สำเร็จ! ขยับหน้าเล็กน้อยแล้วกดอีกครั้ง</span>';
       btnSave.disabled = false;

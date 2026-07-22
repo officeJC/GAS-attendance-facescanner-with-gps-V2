@@ -113,6 +113,7 @@ function createAttendanceContext() {
     ])]
   ]);
   const properties = new Map();
+  const cache = new Map();
   let uuidCounter = 0;
 
   const spreadsheet = {
@@ -140,6 +141,13 @@ function createAttendanceContext() {
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: key => properties.get(key) ?? null
+      })
+    },
+    CacheService: {
+      getScriptCache: () => ({
+        get: key => cache.get(key) ?? null,
+        put: (key, value) => cache.set(key, String(value)),
+        remove: key => cache.delete(key)
       })
     },
     Utilities: {

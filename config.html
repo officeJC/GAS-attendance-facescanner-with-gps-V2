@@ -6,6 +6,7 @@
   <title>ตั้งค่าระบบ</title>
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
   <script src="js/api-config.js"></script>
+  <script src="js/api-client.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -342,7 +343,7 @@
   document.getElementById('loginForm').addEventListener('submit', loginAdmin);
 
   window.onload = async function() {
-    const savedUrl = localStorage.getItem('gasApiUrl') || GAS_API_URL;
+    const savedUrl = AttendanceApi.getApiUrl(GAS_API_URL);
     document.getElementById('loginApiUrl').value = savedUrl;
     document.getElementById('apiUrl').value = savedUrl;
 
@@ -416,16 +417,18 @@
   }
 
   async function postApi(apiUrl, payload) {
-    const response = await fetch(apiUrl, {
+    return AttendanceApi.requestJson(apiUrl, {
       method: 'POST',
       body: JSON.stringify(payload)
-    });
-    return response.json();
+    }, { retries: 0, timeoutMs: 25000 });
   }
 
   function loadGpsConfig(apiUrl) {
-    fetch(apiUrl + '?action=getConfig')
-      .then(r => r.json())
+    AttendanceApi.requestJson(
+      AttendanceApi.actionUrl(apiUrl, 'getConfig'),
+      {},
+      { retries: 2 }
+    )
       .then(config => {
         document.getElementById('lat').value    = config.lat    || '';
         document.getElementById('lng').value    = config.lng    || '';
@@ -454,8 +457,11 @@
   async function loadRegistrationStatus(apiUrl) {
     const statusElement = document.getElementById('registrationModeStatus');
     try {
-      const response = await fetch(apiUrl + '?action=getRegistrationStatus');
-      const status = await response.json();
+      const status = await AttendanceApi.requestJson(
+        AttendanceApi.actionUrl(apiUrl, 'getRegistrationStatus'),
+        {},
+        { retries: 2 }
+      );
       if (!status.success) throw new Error(status.error || 'โหลดสถานะไม่สำเร็จ');
       statusElement.innerText = status.enabled
         ? '✅ เปิดรับลงทะเบียนอยู่\nหมดเวลา: ' + formatBangkokDateTime(status.expiresAt)
@@ -533,11 +539,13 @@
     showMsg('⏳ กำลังบันทึก...', '');
 
     try {
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'saveConfig', lat, lng, radius, sessionToken: adminSessionToken })
+      const data = await postApi(apiUrl, {
+        action: 'saveConfig',
+        lat,
+        lng,
+        radius,
+        sessionToken: adminSessionToken
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error || 'บันทึกการตั้งค่าไม่สำเร็จ');
       showMsg('✅ ' + (data.message || 'บันทึกสำเร็จ'), 'success');
       loadLineBotStatus(apiUrl);

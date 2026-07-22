@@ -10,6 +10,8 @@ const LINE_PUSH_ENDPOINT = 'https://api.line.me/v2/bot/message/push';
 const ADMIN_SESSION_VERSION = 1;
 const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
 const ADMIN_LOGIN_LOCK_SECONDS = 900;
+const KNOWN_FACES_CACHE_KEY = 'KNOWN_FACES_V2';
+const KNOWN_FACES_CACHE_SECONDS = 300;
 const ATTENDANCE_HEADERS = [
   'Request ID',
   'Name',
@@ -365,6 +367,11 @@ function registerUser(name, faceDescriptor) {
   }
 
   sheet.appendRow([normalizedName, JSON.stringify(faceDescriptor), new Date()]);
+  try {
+    CacheService.getScriptCache().remove(KNOWN_FACES_CACHE_KEY);
+  } catch (cacheError) {
+    // Cache invalidation must never turn a successful registration into a client retry.
+  }
   appendAuditLog_('USER_REGISTERED', normalizedName, 'SUCCESS', {
     source: 'SELF_REGISTRATION_WEB',
     verificationStatus: 'ADMIN_WINDOW_AUTHORIZED',
@@ -374,6 +381,16 @@ function registerUser(name, faceDescriptor) {
 }
 
 function getKnownFaces() {
+  const cache = CacheService.getScriptCache();
+  const cachedFaces = cache.get(KNOWN_FACES_CACHE_KEY);
+  if (cachedFaces) {
+    try {
+      return JSON.parse(cachedFaces);
+    } catch (error) {
+      cache.remove(KNOWN_FACES_CACHE_KEY);
+    }
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('Users');
   if (!sheet || sheet.getLastRow() === 0) return [];
@@ -392,6 +409,14 @@ function getKnownFaces() {
       appendAuditLog_('USER_DESCRIPTOR_READ', String(name), 'INVALID_DESCRIPTOR', {
         sourceRow: i + 1
       });
+    }
+  }
+  const serializedUsers = JSON.stringify(users);
+  if (serializedUsers.length < 90000) {
+    try {
+      cache.put(KNOWN_FACES_CACHE_KEY, serializedUsers, KNOWN_FACES_CACHE_SECONDS);
+    } catch (cacheError) {
+      // The sheet remains the source of truth if Apps Script cache is unavailable.
     }
   }
   return users;

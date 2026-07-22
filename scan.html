@@ -4,8 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>สแกนลงเวลาเข้า / ออกงาน</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap" rel="stylesheet">
   <script src="js/api-config.js"></script>
+  <script src="js/api-client.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -315,7 +317,7 @@
 </div>
 
 <script>
-  const API_URL        = localStorage.getItem('gasApiUrl') || GAS_API_URL;
+  const API_URL        = AttendanceApi.getApiUrl(GAS_API_URL);
   const video          = document.getElementById('video');
   const mainStatus     = document.getElementById('main-status');
   const overlayStatus  = document.getElementById('overlay-status');
@@ -325,9 +327,15 @@
   const btnStart       = document.getElementById('btnStart');
 
   const MATCH_THRESHOLD = 0.45;
+  const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+  const FACE_DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({
+    inputSize: 224,
+    scoreThreshold: 0.5
+  });
 
   let knownFaces   = [];
   let scanInterval = null;
+  let scanActive   = false;
   let currentMatch = null;
   let currentFaceDistance = null;
   let currentRequestId = null;
@@ -343,8 +351,15 @@
 
   async function init() {
     try {
-      mainStatus.innerText = '1/4 ตรวจสอบ GPS...';
-      await checkGPS();
+      mainStatus.innerText = '⏳ กำลังโหลด GPS, AI และข้อมูลพนักงาน...';
+      overlayStatus.innerText = 'กำลังโหลด...';
+      const results = await Promise.all([checkGPS(), initFaceSystem()]);
+      if (!results[0]) return;
+
+      mainStatus.innerText    = '✅ ระบบพร้อมใช้งาน';
+      mainStatus.style.color  = '#34d399';
+      overlayStatus.innerText = 'แตะปุ่มเพื่อเริ่มสแกน';
+      btnStart.style.display  = 'inline-block';
     } catch (e) {
       showError(e.message);
     }
@@ -363,12 +378,15 @@
           currentLng = pos.coords.longitude;
 
           try {
-            const config = await fetch(API_URL + '?action=getConfig').then(r => r.json());
+            const config = await AttendanceApi.requestJson(
+              AttendanceApi.actionUrl(API_URL, 'getConfig'),
+              {},
+              { retries: 2 }
+            );
 
             if (!config.lat || !config.lng || config.radius == 0) {
               gpsStatus.innerHTML = '<span style="color:#34d399">📍 GPS: ไม่จำกัดพื้นที่</span>';
-              resolve();
-              initFaceSystem();
+              resolve(true);
               return;
             }
 
@@ -376,13 +394,13 @@
 
             if (dist <= config.radius) {
               gpsStatus.innerHTML = '<span style="color:#34d399">📍 GPS: OK (ห่างเป้าหมาย ' + dist.toFixed(3) + ' km)</span>';
-              resolve();
-              initFaceSystem();
+              resolve(true);
             } else {
               gpsStatus.innerHTML = '<span style="color:#f87171">📍 GPS: ห่างเกินไป (' + dist.toFixed(3) + ' km / กำหนด ' + config.radius + ' km)</span>';
               gpsAlertBox.style.display = 'block';
               mainStatus.innerText = '⛔ ไม่อนุญาตให้สแกน';
               overlayStatus.innerText = 'Out of Range';
+              resolve(false);
             }
           } catch (e) {
             reject(new Error('เชื่อมต่อ API ไม่ได้: ' + e.message));
@@ -395,38 +413,33 @@
 
   // ===== Load AI =====
   async function initFaceSystem() {
-    mainStatus.innerText = '2/4 โหลด AI Model...';
-    const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
     try {
       await Promise.all([
-        faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
         faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+        loadFaceDatabase()
       ]);
-      loadFaceDatabase();
     } catch (e) {
-      showError('โหลด AI Model ล้มเหลว: ' + e.message);
+      throw new Error('โหลดระบบจดจำใบหน้าล้มเหลว: ' + e.message);
     }
   }
 
   // ===== Load DB =====
   async function loadFaceDatabase() {
-    mainStatus.innerText = '3/4 โหลดฐานข้อมูลพนักงาน...';
-    try {
-      const data = await fetch(API_URL + '?action=getKnownFaces').then(r => r.json());
-      if (!data || data.length === 0) return showError('ไม่พบข้อมูลพนักงาน กรุณาลงทะเบียนก่อน');
-
-      knownFaces = data.map(u => ({
-        name: u.label,
-        descriptor: new Float32Array(u.descriptor)
-      }));
-
-      mainStatus.innerText    = '✅ ระบบพร้อมใช้งาน';
-      mainStatus.style.color  = '#34d399';
-      btnStart.style.display  = 'inline-block';
-    } catch (e) {
-      showError('โหลดฐานข้อมูลล้มเหลว: ' + e.message);
+    const data = await AttendanceApi.requestJson(
+      AttendanceApi.actionUrl(API_URL, 'getKnownFaces'),
+      {},
+      { retries: 2, timeoutMs: 20000 }
+    );
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error('ไม่พบข้อมูลพนักงาน กรุณาลงทะเบียนก่อน');
     }
+
+    knownFaces = data.map(u => ({
+      name: u.label,
+      descriptor: new Float32Array(u.descriptor)
+    }));
   }
 
   // ===== Camera =====
@@ -435,7 +448,13 @@
     mainStatus.innerText   = 'กำลังเปิดกล้อง...';
     mainStatus.style.color = '#94a3b8';
 
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
+    navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      }
+    })
       .then(stream => {
         video.srcObject = stream;
         video.classList.add('active');
@@ -452,30 +471,49 @@
 
   // ===== Scan Loop =====
   function startScanLoop() {
-    if (scanInterval) clearInterval(scanInterval);
+    stopScanLoop();
+    scanActive = true;
     overlayStatus.innerText     = 'มองกล้องเพื่อสแกน';
     overlayStatus.style.background = 'rgba(0,0,0,0.65)';
+    runScanIteration();
+  }
 
-    scanInterval = setInterval(async () => {
-      if (video.paused || video.ended) return;
+  async function runScanIteration() {
+    if (!scanActive) return;
+    if (video.paused || video.ended) {
+      scanInterval = setTimeout(runScanIteration, 250);
+      return;
+    }
 
+    try {
       const detection = await faceapi
-        .detectSingleFace(video)
+        .detectSingleFace(video, FACE_DETECTOR_OPTIONS)
         .withFaceLandmarks()
         .withFaceDescriptor();
 
       if (detection) {
         const best = findBestMatch(detection.descriptor);
         if (best.distance < MATCH_THRESHOLD) {
-          clearInterval(scanInterval);
+          stopScanLoop();
           document.getElementById('scanLine').classList.remove('active');
           showModal(best);
+          return;
         } else {
           overlayStatus.innerText            = 'ไม่รู้จัก (' + best.distance.toFixed(2) + ')';
           overlayStatus.style.background     = 'rgba(239,68,68,0.6)';
         }
       }
-    }, 500);
+    } catch (error) {
+      overlayStatus.innerText = 'กำลังลองสแกนใหม่...';
+    }
+
+    if (scanActive) scanInterval = setTimeout(runScanIteration, 650);
+  }
+
+  function stopScanLoop() {
+    scanActive = false;
+    if (scanInterval) clearTimeout(scanInterval);
+    scanInterval = null;
   }
 
   function findBestMatch(queryDesc) {
@@ -514,7 +552,7 @@
     selectedButton.innerText = 'กำลังบันทึก...';
 
     try {
-      const res = await fetch(API_URL, {
+      const data = await AttendanceApi.requestJson(API_URL, {
         method: 'POST',
         body: JSON.stringify({
           action: 'logAttendance',
@@ -525,8 +563,7 @@
           faceDistance: currentFaceDistance,
           requestId: currentRequestId
         })
-      });
-      const data = await res.json();
+      }, { retries: 1, timeoutMs: 25000 });
       if (!data.success) throw new Error(data.error || 'บันทึกเวลาไม่สำเร็จ');
       alert('✅ ' + (data.message || 'บันทึกเวลาสำเร็จ') + '\nLINE: ' + getLineStatusLabel(data.notificationStatus));
       window.location.href = 'index.html';
@@ -544,7 +581,7 @@
     currentMatch = null;
     currentFaceDistance = null;
     currentRequestId = null;
-    if (scanInterval) clearInterval(scanInterval);
+    stopScanLoop();
 
     if (video.srcObject) {
       video.srcObject.getTracks().forEach(t => t.stop());
