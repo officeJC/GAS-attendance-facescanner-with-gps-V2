@@ -298,7 +298,7 @@
     try {
       await Promise.all([
         faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
         faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
       ]);
       startCamera();
@@ -335,7 +335,7 @@
 
     const detection = await faceapi
       .detectSingleFace(video, FACE_DETECTOR_OPTIONS)
-      .withFaceLandmarks()
+      .withFaceLandmarks(true)
       .withFaceDescriptor();
 
     if (!detection) {

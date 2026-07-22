@@ -51,6 +51,9 @@ test('admin can control and share the employee registration window', () => {
   assert.match(html, /actionUrl\(apiUrl,\s*'getRegistrationStatus'\)/);
   assert.match(html, /id="registrationUrl"/);
   assert.match(html, /copyRegistrationLink/);
+  assert.match(html, /action:\s*'listUsers'/);
+  assert.match(html, /action:\s*'deleteUser'/);
+  assert.match(html, /ลบสมาชิก/);
 });
 
 test('registration page is no-login and checks the public registration window', () => {

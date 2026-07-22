@@ -152,7 +152,13 @@ function createAttendanceContext() {
     },
     Utilities: {
       getUuid: () => `00000000-0000-4000-8000-${String(++uuidCounter).padStart(12, '0')}`,
-      formatDate: (_date, _zone, pattern) => pattern === 'd/M/yyyy' ? '21/7/2026' : '08:30:15'
+      formatDate: (_date, _zone, pattern) => {
+        if (pattern === 'd/M/yyyy') return '21/7/2026';
+        if (pattern === 'd') return '21';
+        if (pattern === 'M') return '7';
+        if (pattern === 'yyyy') return '2026';
+        return '08:30:15';
+      }
     },
     LockService: {
       getScriptLock: () => ({ waitLock() {}, releaseLock() {} })
@@ -194,6 +200,7 @@ test('logAttendance writes verified IN record and records DRY_RUN LINE status', 
 
 test('check-out calculates work duration from the latest open check-in', () => {
   const { context, sheets } = createAttendanceContext();
+  assert.equal(context.formatThaiDate_(new Date()), '21 ก.ค. 2569');
   context.logAttendance(
     'สมชาย ใจดี',
     13.7563,

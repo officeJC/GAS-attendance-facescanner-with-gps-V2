@@ -60,6 +60,12 @@ function doPost(e) {
     if (action === 'getLineBotStatus') {
       return jsonResponse_(getLineBotStatus(data.sessionToken));
     }
+    if (action === 'listUsers') {
+      return jsonResponse_(listUsers(data.sessionToken));
+    }
+    if (action === 'deleteUser') {
+      return jsonResponse_(deleteUser(data.name, data.sessionToken));
+    }
     if (action === 'registerUser') {
       return jsonResponse_(registerUser(data.name, data.faceDescriptor));
     }
@@ -364,10 +370,10 @@ function registerUser(name, faceDescriptor) {
   let sheet = ss.getSheetByName('Users');
   if (!sheet) sheet = ss.insertSheet('Users');
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Name', 'Face Descriptor', 'Registered At']);
+    sheet.appendRow(['Name', 'Face Descriptor', 'Registered At', 'Active', 'Deleted At', 'Deleted By']);
   }
 
-  sheet.appendRow([normalizedName, JSON.stringify(faceDescriptor), new Date()]);
+  sheet.appendRow([normalizedName, JSON.stringify(faceDescriptor), new Date(), true, '', '']);
   try {
     CacheService.getScriptCache().remove(KNOWN_FACES_CACHE_KEY);
   } catch (cacheError) {
@@ -403,7 +409,7 @@ function getKnownFaces() {
   for (let i = startIndex; i < data.length; i++) {
     const name = data[i][0];
     const jsonStr = data[i][1];
-    if (!name || !jsonStr) continue;
+    if (!name || !jsonStr || !isUserActive_(data[i])) continue;
     try {
       users.push({ label: String(name), descriptor: JSON.parse(jsonStr) });
     } catch (error) {
@@ -421,6 +427,85 @@ function getKnownFaces() {
     }
   }
   return users;
+}
+
+function listUsers(sessionToken) {
+  requireAdminSession_(sessionToken);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Users');
+  if (!sheet || sheet.getLastRow() <= 1) return { success: true, users: [] };
+
+  const data = sheet.getDataRange().getValues();
+  const startIndex = isUsersHeaderRow_(data[0]) ? 1 : 0;
+  const usersByName = {};
+  for (let i = startIndex; i < data.length; i++) {
+    const name = String(data[i][0] || '').trim();
+    if (!name || !isUserActive_(data[i])) continue;
+    if (!usersByName[name]) {
+      usersByName[name] = {
+        name: name,
+        faceCount: 0,
+        registeredAt: toIsoStringOrNull_(data[i][2])
+      };
+    }
+    usersByName[name].faceCount++;
+  }
+  return {
+    success: true,
+    users: Object.keys(usersByName).sort().map(function (name) { return usersByName[name]; })
+  };
+}
+
+function deleteUser(name, sessionToken) {
+  const adminSession = requireAdminSession_(sessionToken);
+  const normalizedName = String(name || '').trim();
+  if (!normalizedName) throw new Error('กรุณาระบุชื่อพนักงาน');
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Users');
+  if (!sheet || sheet.getLastRow() <= 1) throw new Error('ไม่พบข้อมูลพนักงาน');
+
+  const data = sheet.getDataRange().getValues();
+  const startIndex = isUsersHeaderRow_(data[0]) ? 1 : 0;
+  const deletedAt = new Date().toISOString();
+  let deactivatedRows = 0;
+
+  sheet.getRange(1, 4, 1, 3).setValues([['Active', 'Deleted At', 'Deleted By']]);
+  for (let i = startIndex; i < data.length; i++) {
+    if (String(data[i][0] || '').trim() !== normalizedName || !isUserActive_(data[i])) continue;
+    sheet.getRange(i + 1, 4, 1, 3).setValues([[false, deletedAt, adminSession.sub]]);
+    deactivatedRows++;
+  }
+
+  if (deactivatedRows === 0) throw new Error('ไม่พบพนักงานที่ยังเปิดใช้งาน');
+  try {
+    CacheService.getScriptCache().remove(KNOWN_FACES_CACHE_KEY);
+  } catch (cacheError) {
+    // The sheet remains the source of truth if cache invalidation is unavailable.
+  }
+  appendAuditLog_('USER_SOFT_DELETED', normalizedName, 'SUCCESS', {
+    adminUsername: adminSession.sub,
+    deactivatedFaceRows: deactivatedRows,
+    deletedAt: deletedAt
+  });
+  return {
+    success: true,
+    message: 'ปิดใช้งานพนักงานเรียบร้อย',
+    deactivatedFaceRows: deactivatedRows
+  };
+}
+
+function isUserActive_(row) {
+  const value = row && row.length > 3 ? row[3] : '';
+  return value === '' || value === null || value === true ||
+    String(value).trim().toUpperCase() === 'TRUE' ||
+    String(value).trim().toUpperCase() === 'ACTIVE';
+}
+
+function toIsoStringOrNull_(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 function isUsersHeaderRow_(row) {
@@ -457,6 +542,7 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
   const location = validateAttendanceLocation_(lat, lng);
   const now = new Date();
   const dateStr = Utilities.formatDate(now, APP_TIME_ZONE, 'd/M/yyyy');
+  const dateDisplay = formatThaiDate_(now);
   const timeStr = Utilities.formatDate(now, APP_TIME_ZONE, 'HH:mm:ss');
   const mapLink = location.hasCoordinates
     ? 'https://www.google.com/maps?q=' + location.lat + ',' + location.lng
@@ -471,6 +557,7 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
     attendanceType: normalizedType,
     time: timeStr,
     date: dateStr,
+    dateDisplay: dateDisplay,
     timestampIso: now.toISOString(),
     lat: location.hasCoordinates ? location.lat : '-',
     lng: location.hasCoordinates ? location.lng : '-',
@@ -636,6 +723,17 @@ function formatWorkDuration_(totalMinutes) {
   return hours + '.' + minutes + ' ชม.';
 }
 
+function formatThaiDate_(date) {
+  const thaiMonths = [
+    'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+    'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+  ];
+  const day = Number(Utilities.formatDate(date, APP_TIME_ZONE, 'd'));
+  const month = Number(Utilities.formatDate(date, APP_TIME_ZONE, 'M'));
+  const buddhistYear = Number(Utilities.formatDate(date, APP_TIME_ZONE, 'yyyy')) + 543;
+  return day + ' ' + thaiMonths[month - 1] + ' ' + buddhistYear;
+}
+
 function validateAttendanceLocation_(lat, lng) {
   const numericLat = toFiniteNumber_(lat);
   const numericLng = toFiniteNumber_(lng);
@@ -728,8 +826,9 @@ function buildLineAttendanceMessage_(record) {
   const isCheckIn = record.attendanceType === 'IN';
   const lines = [
     isCheckIn ? '🟢 แจ้งสแกนเข้างาน' : '🔴 แจ้งสแกนออกงาน',
+    '',
     'ชื่อ: ' + record.name,
-    'วันที่: ' + record.date,
+    'วันที่: ' + (record.dateDisplay || record.date),
     'เวลา: ' + record.time + ' น.',
     'ประเภท: ' + (isCheckIn ? 'เข้างาน' : 'ออกงาน')
   ];

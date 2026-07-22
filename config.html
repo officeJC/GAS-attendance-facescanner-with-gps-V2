@@ -162,6 +162,19 @@
       background: rgba(255,255,255,0.05); color: #cbd5e1;
       line-height: 1.55; white-space: pre-line;
     }
+    .employee-list { display: grid; gap: 10px; margin-bottom: 14px; }
+    .employee-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+    }
+    .employee-name { color: #e2e8f0; font-weight: 600; }
+    .employee-meta { color: #64748b; font-size: 0.78em; margin-top: 3px; }
+    .btn-delete-user {
+      border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.1);
+      color: #fca5a5; border-radius: 9px; padding: 7px 10px; cursor: pointer;
+      font-family: 'Sarabun', sans-serif; white-space: nowrap;
+    }
 
     .btn-back {
       display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -312,6 +325,19 @@
     <p class="note">พนักงานเปิดลิงก์และลงทะเบียนใบหน้าได้โดยไม่ต้อง Login เฉพาะช่วงที่แอดมินเปิดรับเท่านั้น</p>
   </div>
 
+  <!-- Employee Management Card -->
+  <div class="card">
+    <div class="section-header">
+      <div class="section-icon indigo">👥</div>
+      <span class="section-title-text">จัดการสมาชิก</span>
+    </div>
+    <div id="employeeList" class="employee-list">
+      <div class="note">กำลังโหลดรายชื่อพนักงาน...</div>
+    </div>
+    <button class="btn btn-copy" type="button" onclick="loadUsers()">รีเฟรชรายชื่อ</button>
+    <p class="note">ปุ่มลบจะปิดใช้งานใบหน้าของพนักงาน แต่ยังเก็บประวัติลงเวลาและ Audit Log ไว้</p>
+  </div>
+
   <!-- LINE Bot Status Card -->
   <div class="card">
     <div class="section-header">
@@ -406,6 +432,7 @@
     loadGpsConfig(apiUrl);
     loadLineBotStatus(apiUrl);
     loadRegistrationStatus(apiUrl);
+    loadUsers();
   }
 
   function logoutAdmin() {
@@ -511,6 +538,72 @@
       timeStyle: 'short',
       timeZone: 'Asia/Bangkok'
     }).format(new Date(isoValue));
+  }
+
+  async function loadUsers() {
+    const listElement = document.getElementById('employeeList');
+    listElement.innerHTML = '<div class="note">กำลังโหลดรายชื่อพนักงาน...</div>';
+    try {
+      const result = await postApi(activeApiUrl, {
+        action: 'listUsers',
+        sessionToken: adminSessionToken
+      });
+      if (!result.success) throw new Error(result.error || 'โหลดรายชื่อไม่สำเร็จ');
+      renderUsers(result.users || []);
+    } catch (error) {
+      listElement.textContent = '❌ โหลดรายชื่อไม่ได้: ' + error.message;
+    }
+  }
+
+  function renderUsers(users) {
+    const listElement = document.getElementById('employeeList');
+    listElement.innerHTML = '';
+    if (users.length === 0) {
+      listElement.textContent = 'ยังไม่มีพนักงานที่เปิดใช้งาน';
+      return;
+    }
+
+    users.forEach(user => {
+      const item = document.createElement('div');
+      item.className = 'employee-item';
+
+      const details = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'employee-name';
+      name.textContent = user.name;
+      const meta = document.createElement('div');
+      meta.className = 'employee-meta';
+      meta.textContent = 'ข้อมูลใบหน้า ' + user.faceCount + ' รายการ';
+      details.appendChild(name);
+      details.appendChild(meta);
+
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'btn-delete-user';
+      deleteButton.textContent = 'ลบสมาชิก';
+      deleteButton.addEventListener('click', () => deactivateUser(user.name));
+
+      item.appendChild(details);
+      item.appendChild(deleteButton);
+      listElement.appendChild(item);
+    });
+  }
+
+  async function deactivateUser(name) {
+    if (!window.confirm('ยืนยันลบสมาชิก “' + name + '” ออกจากระบบสแกนใบหน้า?')) return;
+    showMsg('⏳ กำลังปิดใช้งานสมาชิก...', '');
+    try {
+      const result = await postApi(activeApiUrl, {
+        action: 'deleteUser',
+        name: name,
+        sessionToken: adminSessionToken
+      });
+      if (!result.success) throw new Error(result.error || 'ลบสมาชิกไม่สำเร็จ');
+      showMsg('✅ ' + (result.message || 'ลบสมาชิกเรียบร้อย'), 'success');
+      await loadUsers();
+    } catch (error) {
+      showMsg('❌ ' + error.message, 'error');
+    }
   }
 
   function getCurrentLocation() {

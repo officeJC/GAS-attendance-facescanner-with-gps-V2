@@ -45,6 +45,28 @@ function createAuthContext(initialProperties = {}) {
         },
         getLastRow() {
           return this.rows.length;
+        },
+        getDataRange() {
+          return {
+            getValues: () => this.rows.map(row => [...row])
+          };
+        },
+        getRange(row, column, rowCount = 1, columnCount = 1) {
+          return {
+            getValue: () => this.rows[row - 1]?.[column - 1] ?? '',
+            setValue: value => {
+              while (this.rows.length < row) this.rows.push([]);
+              this.rows[row - 1][column - 1] = value;
+            },
+            setValues: values => {
+              for (let rowOffset = 0; rowOffset < rowCount; rowOffset++) {
+                while (this.rows.length < row + rowOffset) this.rows.push([]);
+                for (let columnOffset = 0; columnOffset < columnCount; columnOffset++) {
+                  this.rows[row + rowOffset - 1][column + columnOffset - 1] = values[rowOffset][columnOffset];
+                }
+              }
+            }
+          };
         }
       };
       sheets.set(name, sheet);
@@ -146,6 +168,8 @@ test('protected admin operations reject a missing session', () => {
   assert.throws(() => context.getLineBotStatus(''), /เข้าสู่ระบบผู้ดูแล/);
   assert.throws(() => context.saveConfig(13.7, 100.5, 0.1, ''), /เข้าสู่ระบบผู้ดูแล/);
   assert.throws(() => context.setRegistrationMode(true, 30, ''), /เข้าสู่ระบบผู้ดูแล/);
+  assert.throws(() => context.listUsers(''), /เข้าสู่ระบบผู้ดูแล/);
+  assert.throws(() => context.deleteUser('Employee', ''), /เข้าสู่ระบบผู้ดูแล/);
 });
 
 test('self registration is available only while an admin-opened window is active', () => {
@@ -172,6 +196,19 @@ test('self registration is available only while an admin-opened window is active
   assert.equal(registered.success, true);
   assert.equal(sheets.get('Users').rows.length, 2);
   assert.equal(sheets.get('AuditLog').rows.at(-1)[1], 'USER_REGISTERED');
+
+  const listedUsers = context.listUsers(login.sessionToken);
+  assert.equal(listedUsers.users.length, 1);
+  assert.equal(listedUsers.users[0].name, 'Employee');
+  assert.equal(listedUsers.users[0].faceCount, 1);
+  assert.equal(context.getKnownFaces().length, 1);
+
+  const deleted = context.deleteUser('Employee', login.sessionToken);
+  assert.equal(deleted.success, true);
+  assert.equal(deleted.deactivatedFaceRows, 1);
+  assert.equal(sheets.get('Users').rows[1][3], false);
+  assert.equal(context.getKnownFaces().length, 0);
+  assert.equal(sheets.get('AuditLog').rows.at(-1)[1], 'USER_SOFT_DELETED');
 
   context.setRegistrationMode(false, 30, login.sessionToken);
   assert.equal(context.getRegistrationStatus().enabled, false);
