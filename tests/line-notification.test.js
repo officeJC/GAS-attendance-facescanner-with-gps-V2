@@ -79,9 +79,22 @@ function attendanceRecord(type = 'IN') {
     time: '08:30:15',
     date: '21/7/2026',
     mapLink: 'https://www.google.com/maps?q=13.7563,100.5018',
-    verificationStatus: 'CLIENT_FACE_MATCH_AND_SERVER_GPS_VALIDATED'
+    verificationStatus: 'CLIENT_FACE_MATCH_AND_SERVER_GPS_VALIDATED',
+    workDurationLabel: type === 'OUT' ? '8.38 ชม.' : ''
   };
 }
+
+test('check-out LINE message shows work duration in the concise format', () => {
+  const { context } = createContext();
+
+  const message = context.buildLineAttendanceMessage_(attendanceRecord('OUT'));
+
+  assert.match(message, /🔴 แจ้งสแกนออกงาน/);
+  assert.match(message, /รวมเวลางาน: 8\.38 ชม\./);
+  assert.match(message, /แผนที่: https:\/\/www\.google\.com\/maps/);
+  assert.doesNotMatch(message, /สถานะตรวจสอบ:/);
+  assert.doesNotMatch(message, /รหัสรายการ:/);
+});
 
 test('LINE notification defaults to DRY_RUN and performs no external request', () => {
   const { context, fetchCalls, sheets } = createContext();

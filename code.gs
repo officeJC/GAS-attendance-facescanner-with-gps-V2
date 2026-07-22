@@ -24,7 +24,8 @@ const ATTENDANCE_HEADERS = [
   'Google Map Link',
   'Source',
   'Verification Status',
-  'LINE Status'
+  'LINE Status',
+  'Work Duration'
 ];
 
 function doGet(e) {
@@ -475,7 +476,9 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
     lng: location.hasCoordinates ? location.lng : '-',
     mapLink: mapLink,
     source: 'FACE_SCAN_WEB',
-    verificationStatus: verificationStatus
+    verificationStatus: verificationStatus,
+    workDurationMinutes: null,
+    workDurationLabel: ''
   };
 
   const lock = LockService.getScriptLock();
@@ -495,6 +498,17 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
       };
     }
 
+    if (record.attendanceType === 'OUT') {
+      const openCheckIn = findOpenCheckIn_(sheet, record.name, record.date, now);
+      if (openCheckIn) {
+        record.workDurationMinutes = Math.max(
+          0,
+          Math.floor((now.getTime() - openCheckIn.getTime()) / 60000)
+        );
+        record.workDurationLabel = formatWorkDuration_(record.workDurationMinutes);
+      }
+    }
+
     sheet.appendRow([
       record.requestId,
       record.name,
@@ -507,14 +521,17 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
       record.mapLink,
       record.source,
       record.verificationStatus,
-      'PENDING'
+      'PENDING',
+      record.workDurationLabel
     ]);
     rowNumber = sheet.getLastRow();
     appendAuditLog_('ATTENDANCE_CREATED', record.name, 'SUCCESS', {
       requestId: record.requestId,
       attendanceType: record.attendanceType,
       source: record.source,
-      verificationStatus: record.verificationStatus
+      verificationStatus: record.verificationStatus,
+      workDurationMinutes: record.workDurationMinutes,
+      workDurationLabel: record.workDurationLabel || null
     });
   } finally {
     lock.releaseLock();
@@ -526,6 +543,7 @@ function logAttendance(name, lat, lng, attendanceType, faceDistance, requestId) 
   return {
     success: true,
     attendanceType: normalizedType,
+    workDuration: record.workDurationLabel || null,
     notificationStatus: notification.status,
     message: normalizedType === 'IN' ? 'บันทึกเวลาเข้างานสำเร็จ' : 'บันทึกเวลาออกงานสำเร็จ'
   };
@@ -541,6 +559,9 @@ function ensureAttendanceSheet_() {
   } else {
     const firstCell = String(sheet.getRange(1, 1).getValue()).trim();
     if (firstCell === 'Name') migrateLegacyAttendanceSheet_(sheet);
+  }
+  if (String(sheet.getRange(1, 13).getValue()).trim() !== 'Work Duration') {
+    sheet.getRange(1, 13).setValue('Work Duration');
   }
   return sheet;
 }
@@ -565,7 +586,8 @@ function migrateLegacyAttendanceSheet_(sheet) {
       row[5],
       'LEGACY_ATTENDANCE_SHEET',
       'UNVERIFIED_LEGACY_RECORD',
-      'NOT_APPLICABLE'
+      'NOT_APPLICABLE',
+      ''
     ];
   });
   sheet.getRange(2, 1, migratedRows.length, ATTENDANCE_HEADERS.length).setValues(migratedRows);
@@ -587,6 +609,31 @@ function findAttendanceByRequestId_(sheet, requestId) {
     }
   }
   return null;
+}
+
+function findOpenCheckIn_(sheet, employeeName, attendanceDate, checkOutTime) {
+  if (sheet.getLastRow() <= 1) return null;
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues();
+
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (String(values[i][1]).trim() !== employeeName) continue;
+
+    const timestamp = new Date(values[i][5]);
+    if (!Number.isFinite(timestamp.getTime()) || timestamp >= checkOutTime) continue;
+    if (Utilities.formatDate(timestamp, APP_TIME_ZONE, 'd/M/yyyy') !== attendanceDate) continue;
+
+    const attendanceType = String(values[i][2]).toUpperCase();
+    if (attendanceType === 'OUT') return null;
+    if (attendanceType === 'IN') return timestamp;
+  }
+  return null;
+}
+
+function formatWorkDuration_(totalMinutes) {
+  const safeMinutes = Math.max(0, Math.floor(Number(totalMinutes) || 0));
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = String(safeMinutes % 60).padStart(2, '0');
+  return hours + '.' + minutes + ' ชม.';
 }
 
 function validateAttendanceLocation_(lat, lng) {
@@ -684,12 +731,12 @@ function buildLineAttendanceMessage_(record) {
     'ชื่อ: ' + record.name,
     'วันที่: ' + record.date,
     'เวลา: ' + record.time + ' น.',
-    'ประเภท: ' + (isCheckIn ? 'เข้างาน' : 'ออกงาน'),
-    'แหล่งข้อมูล: ระบบสแกนใบหน้า',
-    'สถานะตรวจสอบ: ' + getVerificationLabel_(record.verificationStatus),
-    'รหัสรายการ: ' + record.requestId
+    'ประเภท: ' + (isCheckIn ? 'เข้างาน' : 'ออกงาน')
   ];
-  if (record.mapLink) lines.push('แผนที่: ' + record.mapLink);
+  if (!isCheckIn) {
+    lines.push('รวมเวลางาน: ' + (record.workDurationLabel || 'ไม่พบเวลาเข้างานวันนี้'));
+  }
+  if (record.mapLink) lines.push('', 'แผนที่: ' + record.mapLink);
   return lines.join('\n');
 }
 

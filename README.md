@@ -17,7 +17,7 @@
 | 📷 **Face Recognition** | จดจำใบหน้าด้วย face-api.js (SSD MobileNet + FaceNet) ค่า threshold 0.45 |
 | 📍 **GPS Geofencing** | ตรวจสอบตำแหน่งด้วยสูตร Haversine กำหนดรัศมีได้อิสระ |
 | ↔️ **เข้า / ออกงาน** | เลือกบันทึกเข้างานหรือออกงานหลังระบบจับคู่ใบหน้า |
-| 💬 **LINE Bot** | แจ้งสแกนเข้า / ออกงานผ่าน LINE Messaging API พร้อม DRY_RUN และ approval flag |
+| 💬 **LINE Bot** | แจ้งสแกนเข้า / ออกงานผ่าน LINE Messaging API พร้อมรวมเวลาทำงานในข้อความขาออก, DRY_RUN และ approval flag |
 | 🔐 **Admin Login** | ป้องกันเฉพาะหน้า Settings ด้วย signed session, salted password hash และ rate limit |
 | 📷 **โหมดรับลงทะเบียน** | แอดมินเปิดรับแบบกำหนดเวลาและส่งลิงก์ให้พนักงานลงทะเบียนเองได้โดยไม่ต้อง Login |
 | 📊 **Google Sheets** | บันทึกข้อมูลพนักงาน / ประวัติเข้า-ออกงาน / สถานะตรวจสอบ / สถานะ LINE |

@@ -181,13 +181,42 @@ test('logAttendance writes verified IN record and records DRY_RUN LINE status', 
   assert.equal(attendanceRows.length, 2);
   assert.deepEqual(attendanceRows[0], [
     'Request ID', 'Name', 'Type', 'Time', 'Date', 'Timestamp ISO',
-    'Latitude', 'Longitude', 'Google Map Link', 'Source', 'Verification Status', 'LINE Status'
+    'Latitude', 'Longitude', 'Google Map Link', 'Source', 'Verification Status', 'LINE Status',
+    'Work Duration'
   ]);
   assert.equal(attendanceRows[1][0], requestId);
   assert.equal(attendanceRows[1][2], 'IN');
   assert.equal(attendanceRows[1][9], 'FACE_SCAN_WEB');
   assert.equal(attendanceRows[1][10], 'CLIENT_FACE_MATCH_AND_SERVER_GPS_VALIDATED');
   assert.equal(attendanceRows[1][11], 'DRY_RUN');
+  assert.equal(attendanceRows[1][12], '');
+});
+
+test('check-out calculates work duration from the latest open check-in', () => {
+  const { context, sheets } = createAttendanceContext();
+  context.logAttendance(
+    'สมชาย ใจดี',
+    13.7563,
+    100.5018,
+    'IN',
+    0.2,
+    '123e4567-e89b-12d3-a456-426614174010'
+  );
+
+  const attendanceSheet = sheets.get('Attendance');
+  attendanceSheet.rows[1][5] = new Date(Date.now() - (8 * 60 + 38) * 60000 - 5000).toISOString();
+
+  const result = context.logAttendance(
+    'สมชาย ใจดี',
+    13.7563,
+    100.5018,
+    'OUT',
+    0.2,
+    '123e4567-e89b-12d3-a456-426614174011'
+  );
+
+  assert.equal(result.workDuration, '8.38 ชม.');
+  assert.equal(attendanceSheet.rows[2][12], '8.38 ชม.');
 });
 
 test('logAttendance rejects a location outside the configured radius', () => {
